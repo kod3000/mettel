@@ -305,6 +305,24 @@ public sealed class BulkJobRunner : BackgroundService
                 END,
                 completed_at = now()
             WHERE id = '" + jobId + "'::uuid");
+
+        // Refresh pg_class.reltuples so the grid's "Table total" reflects the
+        // new row count. Plain INSERT doesn't move reltuples — autovacuum
+        // ANALYZE only trips at ~10 % churn, which for a 5 M-row table means
+        // ~500 k inserts. A bulk job of any size might land under that
+        // threshold, so nudge the planner + the ReltuplesCache readers here.
+        // Cost is a stats sample — bounded, ~seconds even on the 5 M table.
+        try
+        {
+            await conn.ExecuteAsync(new CommandDefinition(
+                "ANALYZE public.inventory", cancellationToken: ct));
+        }
+        catch (Exception ex)
+        {
+            // ANALYZE is best-effort — a failure only means the count stays
+            // stale until autovacuum catches up. Don't fail the job for it.
+            _log.LogWarning(ex, "post-job ANALYZE failed for {JobId}", jobId);
+        }
     }
 
     private async Task MarkFailedAsync(Guid jobId, string reason, CancellationToken ct)
