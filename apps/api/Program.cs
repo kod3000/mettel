@@ -41,6 +41,19 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
 });
 
+// Bulk-upload sizing: Kestrel defaults MaxRequestBodySize to ~30 MB and
+// FormOptions.MultipartBodyLengthLimit to ~128 MB. Both need to match
+// BulkJobEndpoints.MaxFileBytes (200 MB) or a 500 k CSV (~45 MB) 413s
+// before ever reaching the endpoint's own size check. Kept as an explicit
+// constant so the three limits (nginx, Kestrel, endpoint) stay aligned.
+const long MaxUploadBytes = 200L * 1024 * 1024;
+builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = MaxUploadBytes);
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(o =>
+{
+    o.MultipartBodyLengthLimit = MaxUploadBytes;
+    o.ValueLengthLimit = int.MaxValue;
+});
+
 // Writes go through EF Core against the primary. The graded list-read path
 // bypasses this and uses Dapper via IReadRouter → IDbConnections.
 builder.Services.AddDbContext<BruinDbContext>(o => o.UseNpgsql(primaryConn,
