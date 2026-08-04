@@ -1,0 +1,189 @@
+using Bruin.Api.Data;
+using Bruin.Api.Domain;
+using Bruin.Api.Features.Inventory;
+using Bruin.Api.Features.Tenancy;
+using Bruin.Api.Middleware;
+using Bruin.Api.Observability;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
+
+// --worker mode runs only the background worker. Same image, different
+// entrypoint arg — keeps the compose stack to one dotnet build.
+var isWorker = args.Contains("--worker");
+
+var builder = WebApplication.CreateBuilder(args);
+
+var primaryConn = builder.Configuration.GetConnectionString("Primary")
+    ?? Environment.GetEnvironmentVariable("BRUIN_DB_PRIMARY")
+    ?? "Host=localhost;Port=5432;Database=bruin;Username=bruin;Password=bruin";
+var replicaConn = builder.Configuration.GetConnectionString("Replica")
+    ?? Environment.GetEnvironmentVariable("BRUIN_DB_REPLICA")
+    ?? primaryConn;
+
+if (isWorker)
+{
+    // BulkJobRunner drains queued bulk jobs from bulk_job via SELECT ...
+    // FOR UPDATE SKIP LOCKED — safely horizontally scalable, no coordinator.
+    var host = Host.CreateApplicationBuilder(args);
+    host.Services.AddSingleton(sp => new Bruin.Api.Features.BulkJobs.BulkJobRunner(
+        primaryConn,
+        sp.GetRequiredService<ILogger<Bruin.Api.Features.BulkJobs.BulkJobRunner>>()));
+    host.Services.AddHostedService(sp => sp.GetRequiredService<Bruin.Api.Features.BulkJobs.BulkJobRunner>());
+    await host.Build().RunAsync();
+    return;
+}
+
+builder.Services.AddSingleton(new DbEndpoints(primaryConn, replicaConn));
+builder.Services.ConfigureHttpJsonOptions(o =>
+{
+    o.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
+});
+
+// Writes go through EF Core against the primary. The graded list-read path
+// bypasses this and uses Dapper via IReadRouter → IDbConnections.
+builder.Services.AddDbContext<BruinDbContext>(o => o.UseNpgsql(primaryConn,
+    npg => npg.MigrationsHistoryTable("__ef_migrations_history")));
+
+// Dual-pool primitives.
+builder.Services.AddSingleton<IDbConnections>(_ => new DbConnections(primaryConn, replicaConn));
+
+// Observability: process-local counters + gauges exposed at /metrics.
+builder.Services.AddSingleton<Metrics>();
+
+// Cached replica-lag state — singleton so the 250 ms cache is shared across
+// all concurrent requests.
+builder.Services.AddSingleton<ReplicaState>();
+
+// Cached tenant-scale approximation — 30 s TTL, drops one round-trip from
+// every list request.
+builder.Services.AddSingleton<ReltuplesCache>();
+
+// Scoped per-request context: tenant + LSN watermark.
+builder.Services.AddScoped<ITenantContext, TenantContext>();
+builder.Services.AddScoped<ILsnContext, LsnContext>();
+builder.Services.AddScoped<IApiKeyResolver, ApiKeyResolver>();
+
+// Scoped read router — depends on the scoped LsnContext to pick primary vs
+// replica per request. Handlers depend on IReadRouter, not IDbConnections.
+builder.Services.AddScoped<IReadRouter, ReadRouter>();
+
+// Cursor codec singleton — the HMAC key is loaded from config so a rolling
+// deploy can rotate. Default is fine for dev.
+var cursorKey = builder.Configuration["Cursor:HmacKey"]
+    ?? Environment.GetEnvironmentVariable("BRUIN_CURSOR_KEY")
+    ?? "dev-cursor-key-change-me";
+builder.Services.AddSingleton(new CursorCodec(System.Text.Encoding.UTF8.GetBytes(cursorKey)));
+
+builder.Services.AddScoped<ListHandler>();
+builder.Services.AddScoped<WriteHandler>();
+
+// OpenAPI 3.1 emission (Phase 7). Served at /openapi/v1.json — consumed by
+// `packages/api-types` codegen. Kept dev-only by default; production
+// deployments can gate behind an env var.
+builder.Services.AddOpenApi("v1");
+
+var app = builder.Build();
+
+// Apply pending migrations on startup. Migrations are idempotent (IF NOT EXISTS
+// on extensions; EF's history table guards the rest), so this is safe on both
+// empty and already-populated volumes.
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<BruinDbContext>();
+    await db.Database.MigrateAsync();
+}
+
+// Middleware order matters: X-Api-Key first (binds tenant), then LSN
+// (populates min-LSN and installs the response OnStarting hook that writes
+// X-Write-LSN). Both short-circuit before hitting endpoints on failure.
+app.UseMiddleware<ApiKeyMiddleware>();
+app.UseMiddleware<LsnMiddleware>();
+
+app.MapGet("/", () => Results.Ok(new { name = "bruin-api", ok = true }));
+
+// /health/live — process is up. Cheap; no DB touch.
+app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
+
+// /health/ready — primary reachable AND replica reachable-and-not-too-lagged.
+// Per contract: readiness must fail when the replica is down so a rolling
+// deploy doesn't send traffic to a node that will fall back to primary for
+// every read. Lag threshold defaults to 5 s (ReplicaState.LagAcceptable).
+app.MapGet("/health/ready", async (DbEndpoints eps, ReplicaState replica, CancellationToken ct) =>
+{
+    var (primaryOk, primaryErr) = await PingAsync(eps.Primary);
+    // GetReplayLsnAsync refreshes _reachable + lag reading.
+    _ = await replica.GetReplayLsnAsync(ct);
+    var replicaOk = replica.IsReachable;
+    var lagOk = replica.IsLagAcceptable();
+    var payload = new
+    {
+        status = primaryOk && replicaOk && lagOk ? "ready" : "not_ready",
+        primary = new { ok = primaryOk, error = primaryErr },
+        replica = new { ok = replicaOk, lagOk }
+    };
+    return primaryOk && replicaOk && lagOk
+        ? Results.Ok(payload)
+        : Results.Json(payload, statusCode: 503);
+});
+
+// /metrics — Prometheus text format. Two custom series today: fallback
+// counter and replica-lag gauge. Kestrel/ASPNETCORE emit their own via
+// System.Diagnostics.Metrics if a proper exporter is wired later.
+app.MapGet("/metrics", (Metrics m) => Results.Text(m.RenderPrometheus(), "text/plain; version=0.0.4"));
+
+app.MapOpenApi("/openapi/{documentName}.json");
+
+app.MapInventory();
+Bruin.Api.Features.SavedViews.SavedViewEndpoints.MapSavedViews(app);
+
+// Bulk-job endpoints. Upload directory is shared with the worker via a
+// named volume in prod; in dev it's a local path both containers can see.
+var uploadDir = Environment.GetEnvironmentVariable("BRUIN_UPLOAD_DIR") ?? "/uploads";
+Bruin.Api.Features.BulkJobs.BulkJobEndpoints.MapBulkJobs(app, uploadDir);
+Bruin.Api.Features.BulkJobs.BulkJobEvents.MapBulkJobEvents(app);
+
+// Env-gated OFFSET control endpoint (Phase 4 bench only). Contract-invariant:
+// this is the only route in the entire API that touches OFFSET.
+var benchMode = string.Equals(Environment.GetEnvironmentVariable("BRUIN_BENCH_MODE"),
+    "1", StringComparison.Ordinal);
+app.MapBenchOffset(benchMode);
+
+app.Run();
+
+static async Task<(bool ok, string? error)> PingAsync(string conn)
+{
+    try
+    {
+        await using var c = new NpgsqlConnection(conn);
+        await c.OpenAsync();
+        await using var cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT 1";
+        _ = await cmd.ExecuteScalarAsync();
+        return (true, null);
+    }
+    catch (Exception ex)
+    {
+        return (false, ex.GetType().Name + ": " + ex.Message);
+    }
+}
+
+public sealed record DbEndpoints(string Primary, string Replica);
+
+// Phase 0 placeholder — real BulkJobRunner arrives in Phase 10.
+public sealed class WorkerHeartbeat(ILogger<WorkerHeartbeat> log) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            log.LogInformation("worker heartbeat (Phase 0 stub)");
+            try { await Task.Delay(TimeSpan.FromSeconds(15), ct); }
+            catch (TaskCanceledException) { }
+        }
+    }
+}
+
+// Exposed for WebApplicationFactory<Program> in the test project.
+public partial class Program;

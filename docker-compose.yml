@@ -1,0 +1,157 @@
+# Bruin Inventory Grid — local topology.
+#
+# pg-primary streams WAL to pg-replica via `pg_basebackup -R`. Grid reads will
+# eventually route to the replica (Phase 5); writes always go to primary.
+#
+# Postgres tuning:
+#   - Defaults below fit a 2GB Colima VM. Compose reads `PG_*` env vars so
+#     the tuned values (shared_buffers=4GB, effective_cache_size=12GB,
+#     work_mem=32MB, max_wal_size=4GB) can be applied via `.env` on a
+#     machine with headroom — bench numbers in `bench/results.md` assume
+#     the tuned config.
+#   - Data lives in named volumes, never bind mounts (Docker Desktop's
+#     macOS bind-mount IO is too slow for a Postgres data dir).
+
+services:
+  pg-primary:
+    image: postgres:17-alpine
+    container_name: bruin-pg-primary
+    environment:
+      POSTGRES_USER: bruin
+      POSTGRES_PASSWORD: bruin
+      POSTGRES_DB: bruin
+      POSTGRES_HOST_AUTH_METHOD: trust
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - hot_standby=on
+      - -c
+      - hot_standby_feedback=on
+      - -c
+      - wal_keep_size=${PG_WAL_KEEP_SIZE:-512MB}
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-256MB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-1GB}
+      - -c
+      - work_mem=${PG_WORK_MEM:-8MB}
+      - -c
+      - max_wal_size=${PG_MAX_WAL_SIZE:-1GB}
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-100}
+      - -c
+      - max_parallel_workers_per_gather=${PG_PARALLEL_WORKERS:-0}
+    volumes:
+      - pg-primary-data:/var/lib/postgresql/data
+      - ./ops/primary-init.sh:/docker-entrypoint-initdb.d/010-replication.sh:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bruin -d bruin"]
+      interval: 2s
+      timeout: 2s
+      retries: 40
+      start_period: 5s
+
+  pg-replica:
+    image: postgres:17-alpine
+    container_name: bruin-pg-replica
+    entrypoint: ["/replica-entrypoint.sh"]
+    environment:
+      PGUSER: bruin
+      PGPASSWORD: bruin
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_HOST_AUTH_METHOD: trust
+      # Mirror the primary's tuning; planner cost estimates depend on these
+      # and divergent defaults produced divergent plans in Phase 4.
+      PG_SHARED_BUFFERS: "${PG_SHARED_BUFFERS:-256MB}"
+      PG_EFFECTIVE_CACHE_SIZE: "${PG_EFFECTIVE_CACHE_SIZE:-1GB}"
+      PG_WORK_MEM: "${PG_WORK_MEM:-8MB}"
+      PG_MAX_CONNECTIONS: "${PG_MAX_CONNECTIONS:-100}"
+      PG_PARALLEL_WORKERS: "${PG_PARALLEL_WORKERS:-0}"
+    depends_on:
+      pg-primary:
+        condition: service_healthy
+    volumes:
+      - pg-replica-data:/var/lib/postgresql/data
+      - ./ops/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bruin -h 127.0.0.1 -d postgres"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+      start_period: 10s
+
+  api:
+    build:
+      context: ./apps/api
+    container_name: bruin-api
+    depends_on:
+      pg-primary:
+        condition: service_healthy
+      pg-replica:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      BRUIN_DB_PRIMARY: "Host=pg-primary;Port=5432;Database=bruin;Username=bruin;Password=bruin;Maximum Pool Size=150;Timeout=15"
+      BRUIN_DB_REPLICA: "Host=pg-replica;Port=5432;Database=bruin;Username=bruin;Password=bruin;Maximum Pool Size=200;Timeout=3;Connection Idle Lifetime=15;Connection Pruning Interval=5;KeepAlive=5"
+      # Toggled to "1" by `make bench` so the /bench/offset control endpoint
+      # exists during the benchmark window and 404s otherwise.
+      BRUIN_BENCH_MODE: "${BRUIN_BENCH_MODE:-0}"
+      BRUIN_UPLOAD_DIR: "/uploads"
+    volumes:
+      - bulk-uploads:/uploads
+    ports:
+      # Host 8081 → container 8080. Host 8080 is often taken by other JVM dev servers;
+      # 8081 is the local override. Contract still names 8080 for the container.
+      - "8081:8080"
+
+  worker:
+    build:
+      context: ./apps/api
+    container_name: bruin-worker
+    command: ["dotnet", "Bruin.Api.dll", "--worker"]
+    depends_on:
+      pg-primary:
+        condition: service_healthy
+    environment:
+      BRUIN_DB_PRIMARY: "Host=pg-primary;Port=5432;Database=bruin;Username=bruin;Password=bruin;Maximum Pool Size=150;Timeout=15"
+      BRUIN_UPLOAD_DIR: "/uploads"
+    volumes:
+      - bulk-uploads:/uploads
+
+  web:
+    build:
+      context: ./apps/web
+    container_name: bruin-web
+    depends_on:
+      - api
+    environment:
+      VITE_API_BASE: "http://localhost:8081"
+    ports:
+      - "5173:5173"
+
+  seed:
+    # One-shot; not started by `make up`. Fires only via
+    # `docker compose run --rm seed ...` (see `make seed`).
+    profiles: ["seed"]
+    build:
+      context: ./seed
+    depends_on:
+      pg-primary:
+        condition: service_healthy
+    environment:
+      BRUIN_DB_PRIMARY: "Host=pg-primary;Port=5432;Database=bruin;Username=bruin;Password=bruin;Maximum Pool Size=150;Timeout=15"
+
+volumes:
+  pg-primary-data:
+  pg-replica-data:
+  bulk-uploads:

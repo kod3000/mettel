@@ -1,0 +1,13 @@
+serviceNumber,productCategory,productName,status,city,state,address,assignee,notes
+212-555-1000,voice,Hosted PBX Seat,pending,New York,NY,"1 Broadway, NY",j.doe,new install
+212-555-1001,data,Fiber Internet 1G,active,New York,NY,"2 5th Ave, NY",m.chen,
+212-555-1002,wireless,LTE Backup Modem,pending,Newark,NJ,"100 Market St",r.patel,
+212-555-1003,other,SSL Certificate DV,active,New York,NY,,,
+212-555-1004,voice,SIP Trunk Standard,active,Boston,MA,"77 Beacon St",,
+415-555-2000,voice,Hosted PBX Seat,pending,San Francisco,CA,"1 Market St",a.smith,
+415-555-2001,data,Fiber Internet 100M,active,San Francisco,CA,"2 Market St",,
+212-555-1000,voice,Duplicate in-file,pending,,,,,duplicates row 2 above
+212-555-9999,voice,Duplicate of DB row,pending,,,,,duplicates a seeded row when present
+NO-SN-HERE,,Missing service#,pending,,,,,invalid row — empty serviceNumber
+212-555-BAD1,not-a-real-category,X,pending,,,,,invalid productCategory
+212-555-BAD2,voice,X,disconnected,,,,,invalid initial status (must be pending or active)

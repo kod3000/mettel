@@ -1,0 +1,20 @@
+@import "tailwindcss";
+
+/* Reset the Vite starter's centered-narrow layout — the grid needs the full
+   viewport width. Everything else is Tailwind utility classes on components. */
+html,
+body,
+#root {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #f8fafc;
+    color: #111827;
+    font-family: system-ui, -apple-system, "SF Pro Text", Segoe UI, Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+    color-scheme: light;
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@bruin/api-types",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "generate": "openapi-typescript ../../apps/api/openapi.v1.json -o src/generated.ts",
+    "generate:live": "openapi-typescript http://localhost:8081/openapi/v1.json -o src/generated.ts",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.4.4",
+    "typescript": "~6.0.2"
+  }
+}
