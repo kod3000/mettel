@@ -1,0 +1,30 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# Node
+node_modules/
+dist/
+.vite/
+.turbo/
+
+# OS
+.DS_Store
+
+# Env / secrets
+.env
+.env.local
+*.pem
+
+# Postgres data (in case someone tries a bind mount by accident)
+data/
+pg-primary-data/
+pg-replica-data/
+
+# Bench / logs
+bench/results-*.md
+!bench/results.md
+*.log
