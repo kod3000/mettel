@@ -52,7 +52,7 @@ join-back and written to `bulk_job_error`. `processed_rows` checkpoints in the s
 transaction as the insert, so crash + restart resumes at the chunk boundary with an
 identical final success count (test covered).
 
-**Frontend + contract coherence.** **[__]**ms debounce on search; every in-flight
+**Frontend + contract coherence.** 300ms debounce on search; every in-flight
 request carries **[AbortController / sequence token]**, so a slow early keystroke
 can never paint over a fast later one. Sort or filter change resets to page 1 and
 drops the cursor; scroll appends without touching selection. The two halves share
