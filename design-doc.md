@@ -1,0 +1,111 @@
+# Bruin Inventory Grid — Design Doc
+
+Read + write over 5M inventory rows, three tenants, page-100 grid. Correctness and
+honesty over cleverness.
+
+**Why 5M for real.** Estimates and weighted extrapolation would have been accepted
+here. I seeded the full 5M anyway, because projected numbers hide the defects that
+only exist at size — the 127s scan below was invisible at 100k and was the most
+useful thing I found. Due diligence beyond the numbers means seeing it.
+
+**Pagination.** Keyset only. Cursor `v1.<b64payload>.<b64hmac>` carries clientId,
+sort key, dir, filter-hash, `(sortValue, id)`; tenant mismatch or changed filter/sort
+→ 400. Row-value comparison `(sort_col, id) < ($1,$2)` is mandatory since sort
+columns are non-unique. Keyset also means concurrent inserts can't produce the
+duplicate rows or silent skips that offset paging causes mid-scroll — the page
+boundary is a value, not a position.
+
+**Sub-500ms at 5M.** Six indexes, each leading with `client_id`: 3 btree composites
+(created_at; updated_at; status+created_at), 1 unique (client_id, service_number),
+2 GIN — (client_id, search_tsv) and (client_id, service_number trigram) via
+`btree_gin`, so tenant scope stays inside the index. Search is
+`to_tsquery('simple','q:*')` + prefix-anchored `ILIKE 'q%'` for GIN selectivity
+(ADR-0002). Connection init sets `plan_cache_mode=force_custom_plan`: Npgsql's
+generic plan chose created_at scans touching 3.5M rows on no-match terms (127s).
+`reltuples` cached 30s; cap-count skipped when the page fits.
+
+Bench (`make bench`, 12 CPU / 20GB Colima VM): cold list p95 22ms. Search p95
+**[__]ms @1 VU, [__]ms @10 VU**, 1.5s @100 VU; filtered 1.8s @100 VU. Plans are
+correct at the DB layer — the VM saturates 12 vCPU well before a real 16-core
+Postgres would. Plans and trajectory in `bench/results.md`.
+
+**Protecting the primary writer.** Two Npgsql pools, `IReadRouter` scoped per
+request. Empty `X-Min-LSN` → replica; present → cached `pg_last_wal_replay_lsn()`
+compare (250ms TTL) → replica, or primary fallback counted as
+`bruin_read_primary_fallback_total`. `/health/ready` fails on unreachable replica or
+>8MB replication lag (byte-based; timestamp lag lies on idle systems).
+
+**Schema.** Postgres 17, `pg_trgm` + `btree_gin`. UUIDv7 ids double as time-sortable
+keyset tiebreakers. `search_tsv` GENERATED ALWAYS … STORED over
+product_name/address/notes. Enums are text + CHECK, not PG enum types (altering
+those in migrations is painful). `timestamptz` throughout; trigger owns `updated_at`
++ `row_version`. Status transitions (pending→active→disconnected, plus documented
+pending→disconnected) are enforced in **[__]** and rejected as ProblemDetails,
+never a silent no-op.
+
+**Bulk jobs.** POST persists the file, inserts `bulk_job`, returns 202 in <100ms —
+no parsing in the handler. Worker (BackgroundService, same image, `--worker`) claims
+via `SELECT … FOR UPDATE SKIP LOCKED`, so it scales horizontally with no
+coordinator. 5000-row chunks: validate → COPY into `ON COMMIT DROP` staging →
+`INSERT … ON CONFLICT DO NOTHING RETURNING id` counts winners; losers found by
+join-back and written to `bulk_job_error`. `processed_rows` checkpoints in the same
+transaction as the insert, so crash + restart resumes at the chunk boundary with an
+identical final success count (test covered).
+
+**Frontend + contract coherence.** **[__]**ms debounce on search; every in-flight
+request carries **[AbortController / sequence token]**, so a slow early keystroke
+can never paint over a fast later one. Sort or filter change resets to page 1 and
+drops the cursor; scroll appends without touching selection. The two halves share
+one contract rather than mirroring each other: types and enums (`status`,
+`productCategory`) are **[generated from OpenAPI into packages/…]**, so a server
+rename breaks the build instead of the grid. The cursor is opaque to the client —
+it echoes what the server issued and never constructs one, so pagination semantics
+live in exactly one place, and a cursor whose filter-hash no longer matches is
+rejected server-side rather than trusted. Create is the clearest case: the write
+returns its LSN, the client sends it back as `X-Min-LSN` on refetch, and the router
+guarantees the operator reads their own write even off a replica. Read-your-own-
+writes is a property of the two ends agreeing, not of either one alone.
+
+**Multi-tenancy.** Every statement carries `WHERE client_id = @cid`; the EF Core
+global filter is defence in depth; Postgres RLS on `inventory` is the third belt
+(prod connects as non-superuser `bruin_app`). Cross-tenant reads return 404 with a
+ProblemDetails body that leaks nothing — no 403, no FK error.
+
+**What production looks like.** Not this, deliberately. The grid should read a
+replica or a purpose-built projection, never the OLTP table — separating the read
+and write paths is what keeps operator UX stable while bulk jobs and status churn
+hit the primary. The projection arrives over a sync pipeline (logical replication or
+CDC into a denormalised read model), which buys eventual consistency; the LSN router
+above is already the mechanism that makes that correct rather than merely fast. CSV
+work moves to its own deployment — bursty and memory-hungry, with no business
+competing against grid reads for one pod's memory. API runs as replicas with node
+anti-affinity so losing a node costs capacity, not the service; `/health/ready`
+already gates traffic, config is env-driven, workers scale on queue depth.
+
+I'd ship that as a minor version and correct against observed traffic rather than
+guess twice. The inputs I'd want first: how operators actually use the grid (which
+filters, which sorts, what they do after a search), what constraints the data
+carries across its full journey, and the shape of demand — zones, per-sector
+language mix, whether load bursts 09:00–17:00 and drops after 18:00 relative to
+zone. That drives index choice, cache TTLs, and bulk scheduling far better than a
+synthetic bench does.
+
+**What I'd revisit.** (1) Real hardware for the bench. (2) Full-substring search via
+an inverted index over a normalised column, or an external engine. (3)
+`saved_view.columns` UI — endpoint and persistence shipped, show/hide widget cut.
+(4) Optimistic create — chose refetch-with-LSN above, which makes the router
+visibly correct instead of dressing up latency. (5) Render path, once saved views
+let operators pull multi-thousand-row sets into the DOM: row virtualization first,
+and a WebAssembly render layer only if profiling shows the bottleneck is paint
+rather than fetch. At 100 rows a page it isn't, so that stays a hypothesis rather
+than a plan.
+
+**Hours.** ~**12hrs** end-to-end. The tooling below compressed the build; most of
+that time went to reading its output and chasing the two defects it hid.
+
+**AI tooling.** Claude Code and Kimi generated most backend and frontend
+scaffolding, migrations, and tests. I overrode them when they papered over the bench
+p95 miss instead of naming the VM constraint, proposed a MATERIALIZED CTE strictly
+worse than the prefix-search fix, and left `plan_cache_mode` at default — which
+reproduced the 127s scan under load. Every "quick fix" that hid a real defect got
+reversed once we had a repro.
