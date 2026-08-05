@@ -22,6 +22,9 @@ import { CountDisplay } from "./CountDisplay.js";
 interface Props {
     params: ListParams;
     onParamsChange: (next: ListParams) => void;
+    onRowSelect?: (row: InventoryRow) => void;
+    /** When true, rows use GPU-accelerated transform hover (bulge + settle). */
+    gpuHover?: boolean;
 }
 
 const columnHelper = createColumnHelper<InventoryRow>();
@@ -69,7 +72,7 @@ const columns = [
 // Only server-sort the five columns the API supports.
 const SORTABLE = new Set(["serviceNumber", "productName", "status", "createdAt", "updatedAt"]);
 
-export function InventoryGrid({ params, onParamsChange }: Props) {
+export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = false }: Props) {
     const query = useInventoryList(params);
     const rows: InventoryRow[] = useMemo(
         () => query.data?.pages.flatMap((p) => p.rows ?? []) ?? [],
@@ -168,10 +171,21 @@ export function InventoryGrid({ params, onParamsChange }: Props) {
                             {virtualizer.getVirtualItems().map((vr) => {
                                 const row = table.getRowModel().rows[vr.index];
                                 if (!row) return null;
+                                const rowData = row.original;
+                                const clickable = Boolean(onRowSelect);
                                 return (
                                     <div
                                         key={row.id}
                                         data-testid="grid-row"
+                                        role={clickable ? "button" : undefined}
+                                        tabIndex={clickable ? 0 : undefined}
+                                        onClick={clickable ? () => onRowSelect!(rowData) : undefined}
+                                        onKeyDown={clickable ? (e) => {
+                                            if (e.key === "Enter" || e.key === " ") {
+                                                e.preventDefault();
+                                                onRowSelect!(rowData);
+                                            }
+                                        } : undefined}
                                         style={{
                                             position: "absolute",
                                             top: vr.start,
@@ -180,7 +194,7 @@ export function InventoryGrid({ params, onParamsChange }: Props) {
                                             display: "grid",
                                             gridTemplateColumns: GRID_TEMPLATE,
                                         }}
-                                        className="border-b border-slate-100 text-[13px] text-slate-800 hover:bg-slate-50"
+                                        className={rowClassName(clickable, gpuHover)}
                                     >
                                         {row.getVisibleCells().map((c) => (
                                             <div
@@ -224,6 +238,20 @@ function fmtDate(v: string | null | undefined): string {
         const d = new Date(v);
         return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
     } catch { return v; }
+}
+
+// GPU-hover mode enables a subtle scale-y bulge on hover using a springy
+// timing curve. The overshoot easing (cubic-bezier) makes hover-in overshoot
+// slightly then settle, and hover-out briefly dip below the resting height
+// before returning — the "slight bulge, slight dip" effect. Rendered via
+// utility classes defined in index.css so we can share the timing constants.
+function rowClassName(clickable: boolean, gpu: boolean): string {
+    const base = "border-b border-slate-100 text-[13px] text-slate-800 hover:bg-slate-50";
+    const click = clickable ? "cursor-pointer" : "";
+    // `origin-center` keeps the transform centered so the row doesn't
+    // "walk" as it scales; `will-change` lifts it to a GPU layer.
+    const gpuClasses = gpu ? "row-gpu origin-center" : "";
+    return [base, click, gpuClasses].filter(Boolean).join(" ");
 }
 
 function sortIndicator(dir: false | "asc" | "desc"): string {

@@ -29,6 +29,10 @@ export interface ListParams {
 // Canonical form the query hook uses in its key tuple. Kept alphabetical so
 // two callers producing the same logical filter set yield the same key,
 // which is what makes TanStack Query dedupe across React trees.
+// Detail queries share this key prefix so the drawer's fetch and the
+// post-mutation refetch land on the same cache slot.
+export const detailQueryKey = (id: string) => ["inventory", "detail", id] as const;
+
 export const listQueryKey = (p: ListParams) => [
     "inventory",
     "list",

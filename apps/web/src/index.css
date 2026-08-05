@@ -18,3 +18,23 @@ body,
 body {
     color-scheme: light;
 }
+
+/* GPU-accelerated row hover. Springy overshoot easing so hover-in bulges
+   slightly past 1.0 then settles, and hover-out briefly dips under 1.0
+   before returning — a subtle spring the eye reads as "the row is alive."
+   Applied only when the GPU-UI toggle is on. */
+.row-gpu {
+    transition: transform 240ms cubic-bezier(0.34, 1.56, 0.64, 1),
+                background-color 120ms ease;
+    transform: scaleY(1);
+    will-change: transform, background-color;
+    backface-visibility: hidden;
+}
+.row-gpu:hover {
+    transform: scaleY(1.08);
+    z-index: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+    .row-gpu { transition: none; }
+    .row-gpu:hover { transform: none; }
+}
