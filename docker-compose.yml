@@ -16,6 +16,7 @@ services:
   pg-primary:
     image: postgres:17-alpine
     container_name: bruin-pg-primary
+    restart: unless-stopped
     environment:
       POSTGRES_USER: bruin
       POSTGRES_PASSWORD: bruin
@@ -62,6 +63,7 @@ services:
   pg-replica:
     image: postgres:17-alpine
     container_name: bruin-pg-replica
+    restart: unless-stopped
     entrypoint: ["/replica-entrypoint.sh"]
     environment:
       PGUSER: bruin
@@ -94,6 +96,7 @@ services:
     build:
       context: ./apps/api
     container_name: bruin-api
+    restart: unless-stopped
     depends_on:
       pg-primary:
         condition: service_healthy
@@ -118,6 +121,7 @@ services:
     build:
       context: ./apps/api
     container_name: bruin-worker
+    restart: unless-stopped
     command: ["dotnet", "Bruin.Api.dll", "--worker"]
     depends_on:
       pg-primary:
