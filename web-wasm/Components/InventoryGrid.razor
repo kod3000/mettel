@@ -1,0 +1,203 @@
+@inject BruinApiClient Api
+@inject IJSRuntime JS
+@implements IDisposable
+
+@* Virtualized inventory grid backed by keyset-cursor pagination. Loads
+   the first page on parameter change, appends subsequent pages when the
+   user scrolls near the end. Uses Blazor's built-in <Virtualize> for
+   windowed rendering — comparable to @tanstack/react-virtual on the
+   React side. *@
+
+<CountDisplay Filtered="_filtered" Total="_total" TookMs="_tookMs" />
+
+<div class="grid-wrap">
+    <div class="grid-header">
+        @foreach (var col in Columns)
+        {
+            var sorted = Value.Sort == col.Key;
+            <div class="col @(sorted ? "sorted" : "")" @onclick="() => OnSortClick(col)">
+                @col.Label
+                @if (sorted)
+                {
+                    <span class="sort-ind">@(Value.Dir == "asc" ? "▲" : "▼")</span>
+                }
+            </div>
+        }
+    </div>
+
+    <div class="grid-scroll" @ref="_scrollRef" @onscroll="OnScroll">
+        @if (_error is not null)
+        {
+            <div class="err-box" style="margin:12px">
+                <strong>@(_error.Problem.Title ?? "Failed to load")</strong>
+                @if (_error.Problem.Detail is not null) { <div>@_error.Problem.Detail</div> }
+                <button class="btn" style="margin-top:8px" @onclick="ReloadAsync">Retry</button>
+            </div>
+        }
+        else
+        {
+            <Virtualize @ref="_virtualize" Items="_rows" ItemSize="32" OverscanCount="10" Context="row">
+                <div class="grid-row @(row.Id == SelectedId ? "selected" : "")"
+                     @onclick="() => OnRowClick.InvokeAsync(row)">
+                    <div class="mono truncate">@row.ServiceNumber</div>
+                    <div class="truncate">@row.ProductName</div>
+                    <div><span class="badge @row.Status">@row.Status</span></div>
+                    <div class="truncate">@row.ProductCategory</div>
+                    <div class="tabular">@Fmt(row.CreatedAt)</div>
+                    <div class="tabular">@Fmt(row.UpdatedAt)</div>
+                </div>
+            </Virtualize>
+
+            @if (_loadingMore)
+            {
+                <div style="padding:10px;text-align:center;font-size:12px;color:var(--slate-500)">
+                    Loading more…
+                </div>
+            }
+            else if (!_hasMore && _rows.Count > 0)
+            {
+                <div style="padding:10px;text-align:center;font-size:12px;color:var(--slate-400)">
+                    End of results
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public BruinApiClient.ListParams Value { get; set; } = default!;
+    [Parameter] public EventCallback<BruinApiClient.ListParams> ValueChanged { get; set; }
+    [Parameter] public EventCallback<InventoryRow> OnRowClick { get; set; }
+    [Parameter] public string? SelectedId { get; set; }
+
+    private readonly List<InventoryRow> _rows = new();
+    private string? _nextCursor;
+    private bool _hasMore;
+    private bool _loadingMore;
+    private CountEnvelope? _filtered;
+    private CountEnvelope? _total;
+    private long? _tookMs;
+    private ApiException? _error;
+    private CancellationTokenSource? _cts;
+    private ElementReference _scrollRef;
+    private Virtualize<InventoryRow>? _virtualize;
+    // Fingerprint of the last Value we loaded for. On change, we clear
+    // and reload from the top.
+    private string _appliedKey = "";
+
+    private static readonly (string? Key, string Label)[] Columns =
+    {
+        ("serviceNumber", "Service #"),
+        ("productName",   "Product"),
+        ("status",        "Status"),
+        (null,            "Category"),   // unsortable server-side
+        ("createdAt",     "Created"),
+        ("updatedAt",     "Updated"),
+    };
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var key = ParamsKey(Value);
+        if (key == _appliedKey) return;
+        _appliedKey = key;
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+
+        _rows.Clear();
+        _nextCursor = null;
+        _hasMore = false;
+        _filtered = null;
+        _total = null;
+        _tookMs = null;
+        _error = null;
+        _loadingMore = false;
+        StateHasChanged();
+
+        try
+        {
+            var res = await Api.ListAsync(Value with { Cursor = null }, ct);
+            if (ct.IsCancellationRequested) return;
+            _rows.AddRange(res.Rows);
+            _nextCursor = res.NextCursor;
+            _hasMore = res.HasMore;
+            _filtered = res.FilteredCount;
+            _total = res.TotalEstimate;
+            _tookMs = res.TookMs;
+        }
+        catch (OperationCanceledException) { /* swallowed on tenant/filter change */ }
+        catch (ApiException ex) { _error = ex; }
+
+        if (_virtualize is not null) await _virtualize.RefreshDataAsync();
+        StateHasChanged();
+    }
+
+    private async Task LoadMoreAsync()
+    {
+        if (_loadingMore || !_hasMore || _nextCursor is null) return;
+        _loadingMore = true;
+        StateHasChanged();
+        try
+        {
+            var ct = _cts?.Token ?? CancellationToken.None;
+            var res = await Api.ListAsync(Value with { Cursor = _nextCursor }, ct);
+            _rows.AddRange(res.Rows);
+            _nextCursor = res.NextCursor;
+            _hasMore = res.HasMore;
+            _tookMs = res.TookMs;
+        }
+        catch (OperationCanceledException) { }
+        catch (ApiException ex) { _error = ex; }
+        finally
+        {
+            _loadingMore = false;
+            StateHasChanged();
+        }
+    }
+
+    // Cheap scroll heuristic: when the user is within ~10 rows of the
+    // bottom, trigger the next keyset page. Blazor's Virtualize also
+    // has an ItemsProvider path but keyset cursors don't map cleanly to
+    // its (startIndex, count) contract.
+    private async Task OnScroll()
+    {
+        if (!_hasMore || _loadingMore) return;
+        var m = await JS.InvokeAsync<ScrollDims>("bruinScroll.metrics", _scrollRef);
+        if (m.Total - m.Scrolled < 32 * 10) await LoadMoreAsync();
+    }
+
+    private sealed record ScrollDims(double Scrolled, double Total);
+
+    private async Task OnSortClick((string? Key, string Label) col)
+    {
+        if (col.Key is null) return;
+        var (nextSort, nextDir) = NextSortState(Value.Sort, Value.Dir, col.Key);
+        await ValueChanged.InvokeAsync(Value with { Sort = nextSort, Dir = nextDir, Cursor = null });
+    }
+
+    private static (string? Sort, string? Dir) NextSortState(string? curSort, string? curDir, string col)
+    {
+        if (curSort != col)     return (col, "desc");
+        if (curDir == "desc")   return (col, "asc");
+        return (null, null);
+    }
+
+    private static string ParamsKey(BruinApiClient.ListParams p) =>
+        string.Join('|',
+            p.Q ?? "",
+            Join(p.Status), Join(p.ProductCategory), Join(p.State),
+            p.Sort ?? "", p.Dir ?? "",
+            p.PageSize?.ToString() ?? "");
+
+    private static string Join(IReadOnlyCollection<string>? xs) =>
+        xs is null ? "" : string.Join(',', xs.OrderBy(x => x));
+
+    private static string Fmt(DateTimeOffset d) => d.LocalDateTime.ToString("MMM d, HH:mm");
+
+    public void Dispose() => _cts?.Cancel();
+}

@@ -1,0 +1,17 @@
+@inject TenantContext Tenant
+
+<select class="select" @onchange="OnPick" value="@Tenant.Current.Id" aria-label="Client">
+    @foreach (var t in Models.Tenant.All)
+    {
+        <option value="@t.Id">@t.Label</option>
+    }
+</select>
+
+@code {
+    private void OnPick(ChangeEventArgs e)
+    {
+        var id = e.Value?.ToString();
+        var next = Models.Tenant.All.FirstOrDefault(x => x.Id == id);
+        if (next is not null) Tenant.Set(next);
+    }
+}

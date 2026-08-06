@@ -1,0 +1,91 @@
+@inject IJSRuntime JS
+@implements IDisposable
+
+@* Search + multi-select chip filters. Debounces the search box at 300ms
+   (matches the design doc figure — same as the React SPA). Chip toggles
+   emit synchronously since they're low-volume. *@
+
+<div class="filters">
+    <input
+        class="input search"
+        placeholder="Search service # / product / notes…"
+        value="@_q"
+        @oninput="OnSearchInput"
+        aria-label="Search inventory" />
+
+    <div class="chip-group" role="group" aria-label="Status filter">
+        @foreach (var s in Statuses)
+        {
+            var on = Value.Status is not null && Value.Status.Contains(s);
+            <button type="button" class="chip @(on ? "on" : "")" @onclick="() => ToggleStatus(s)">@s</button>
+        }
+    </div>
+
+    <div class="chip-group" role="group" aria-label="Category filter">
+        @foreach (var c in Categories)
+        {
+            var on = Value.ProductCategory is not null && Value.ProductCategory.Contains(c);
+            <button type="button" class="chip @(on ? "on" : "")" @onclick="() => ToggleCategory(c)">@c</button>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public BruinApiClient.ListParams Value { get; set; } = default!;
+    [Parameter] public EventCallback<BruinApiClient.ListParams> ValueChanged { get; set; }
+
+    // Fixed set — small and stable. Categories intentionally short; state
+    // filter is deferred to v2 since v1 is a perf comparison, not a full
+    // clone of the SPA's UX chrome.
+    private static readonly string[] Statuses   = { "pending", "active", "disconnected" };
+    private static readonly string[] Categories = { "Fiber", "DIA", "MPLS", "SD-WAN", "Voice" };
+
+    private string _q = "";
+    private System.Timers.Timer? _debounce;
+
+    protected override void OnParametersSet()
+    {
+        // Keep local `_q` in sync when parent resets Value externally.
+        _q = Value.Q ?? "";
+    }
+
+    private void OnSearchInput(ChangeEventArgs e)
+    {
+        _q = e.Value?.ToString() ?? "";
+        _debounce?.Stop();
+        _debounce ??= new System.Timers.Timer(300) { AutoReset = false };
+        _debounce.Elapsed -= FireSearch;
+        _debounce.Elapsed += FireSearch;
+        _debounce.Start();
+    }
+
+    private async void FireSearch(object? _, System.Timers.ElapsedEventArgs __)
+    {
+        await InvokeAsync(() => Emit(Value with { Q = string.IsNullOrWhiteSpace(_q) ? null : _q.Trim(), Cursor = null }));
+    }
+
+    private Task ToggleStatus(string s) => Emit(Value with {
+        Status = Toggle(Value.Status, s),
+        Cursor = null,
+    });
+
+    private Task ToggleCategory(string c) => Emit(Value with {
+        ProductCategory = Toggle(Value.ProductCategory, c),
+        Cursor = null,
+    });
+
+    private static IReadOnlyCollection<string>? Toggle(IReadOnlyCollection<string>? cur, string val)
+    {
+        var next = cur is null ? new List<string>() : new List<string>(cur);
+        if (!next.Remove(val)) next.Add(val);
+        return next.Count == 0 ? null : next;
+    }
+
+    private Task Emit(BruinApiClient.ListParams next) => ValueChanged.InvokeAsync(next);
+
+    public void Dispose()
+    {
+        _debounce?.Stop();
+        _debounce?.Dispose();
+    }
+}

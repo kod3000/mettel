@@ -1,0 +1,58 @@
+@page "/"
+@inject TenantContext Tenant
+@implements IDisposable
+
+@* Home page — filters + grid + optional row-detail drawer. Rekeyed on
+   tenant change so every child state (grid rows, drawer selection) is
+   torn down cleanly instead of leaking cross-tenant data. *@
+
+<div @key="Tenant.Current.Id" style="display:flex;flex-direction:column;flex:1;min-height:0">
+    <Filters Value="_params" ValueChanged="OnParamsChange" />
+    <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+        <InventoryGrid
+            Value="_params"
+            ValueChanged="OnParamsChange"
+            SelectedId="@_selectedId"
+            OnRowClick="OnRowClick" />
+    </div>
+</div>
+
+@if (_selectedId is not null)
+{
+    <RowDetailDrawer Id="@_selectedId" OnClosed="CloseDrawer" />
+}
+
+@code {
+    private BruinApiClient.ListParams _params = new(PageSize: 100);
+    private string? _selectedId;
+
+    protected override void OnInitialized() => Tenant.OnChanged += OnTenantChanged;
+
+    private void OnTenantChanged()
+    {
+        // Reset to a fresh state — the @key handles child remount.
+        _params = new(PageSize: 100);
+        _selectedId = null;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnParamsChange(BruinApiClient.ListParams next)
+    {
+        _params = next;
+        StateHasChanged();
+    }
+
+    private void OnRowClick(InventoryRow row)
+    {
+        _selectedId = row.Id;
+        StateHasChanged();
+    }
+
+    private void CloseDrawer()
+    {
+        _selectedId = null;
+        StateHasChanged();
+    }
+
+    public void Dispose() => Tenant.OnChanged -= OnTenantChanged;
+}

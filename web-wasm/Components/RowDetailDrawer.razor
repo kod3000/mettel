@@ -1,0 +1,268 @@
+@inject BruinApiClient Api
+@implements IDisposable
+
+@* Right-side drawer: full row + status PATCH. Mirrors the React
+   RowDetailDrawer.tsx behavior:
+     - rowVersion from the detail read is echoed on PATCH; 409
+       concurrency-conflict triggers a refetch.
+     - 5xx errors enter an auto-recovery state with backoff retries;
+       4xx errors are terminal.
+     - Backdrop click + Esc close the drawer when idle.
+     - X-Write-LSN capture is handled up-stack by ApiKeyHandler. *@
+
+<div class="drawer-backdrop" @onclick="OnBackdrop">
+    <aside class="drawer" role="dialog" aria-label="Inventory detail" @onclick:stopPropagation="true">
+        <header class="drawer-header">
+            <div style="flex:1;min-width:0">
+                <div class="eyebrow">Inventory</div>
+                <div class="title mono truncate">@(_row?.ServiceNumber ?? "…")</div>
+            </div>
+            <button class="close-x" @onclick="OnClose" disabled="@_pending" aria-label="Close">✕</button>
+        </header>
+
+        <div class="drawer-body">
+            @if (_recovering)
+            {
+                <div class="recovery" role="status">
+                    <div class="spinner"></div>
+                    <div>
+                        <div style="font-weight:600">System auto-recovery in progress</div>
+                        <div style="font-size:11px">Backend returned an error — retrying (attempt @(_attempt + 1) of @MaxAttempts).</div>
+                    </div>
+                </div>
+            }
+
+            @if (_row is null && _loadingInitial)
+            {
+                <div style="color:var(--slate-500);font-size:12px">Loading…</div>
+            }
+            else if (_row is null && _terminalErr is not null)
+            {
+                <div class="err-box">
+                    <strong>@(_terminalErr.StatusCode == 404 ? "Row not found" : _terminalErr.Problem.Title ?? "Failed to load")</strong>
+                    @if (_terminalErr.Problem.Detail is not null) { <div>@_terminalErr.Problem.Detail</div> }
+                </div>
+            }
+            else if (_row is not null)
+            {
+                <Field Label="Product">
+                    <div>@_row.ProductName</div>
+                    <div class="eyebrow" style="margin-top:2px">@_row.ProductCategory</div>
+                </Field>
+                <Field Label="Status">
+                    <span class="badge @_row.Status">@_row.Status</span>
+                </Field>
+                <Field Label="Assignee">
+                    <div class="mono">@(_row.Assignee ?? "—")</div>
+                </Field>
+                <Field Label="Location">
+                    <div>@LocationLine(_row)</div>
+                    @if (!string.IsNullOrWhiteSpace(_row.Address))
+                    {
+                        <div style="font-size:12px;color:var(--slate-500);margin-top:2px">@_row.Address</div>
+                    }
+                </Field>
+                @if (!string.IsNullOrWhiteSpace(_row.Notes))
+                {
+                    <Field Label="Notes">
+                        <div style="white-space:pre-wrap">@_row.Notes</div>
+                    </Field>
+                }
+                <Field Label="Audit">
+                    <div style="font-size:12px;color:var(--slate-600)" class="tabular">
+                        <div>Created @Fmt(_row.CreatedAt)</div>
+                        <div>Updated @Fmt(_row.UpdatedAt)</div>
+                        <div>Row version <span class="mono">@_row.RowVersion</span></div>
+                    </div>
+                </Field>
+
+                <div class="drawer-actions">
+                    <div class="eyebrow" style="margin-bottom:8px">Change status</div>
+                    @{
+                        var nexts = NextStatuses(_row.Status);
+                    }
+                    @if (nexts.Length == 0)
+                    {
+                        <div style="font-size:12px;color:var(--slate-500);font-style:italic">
+                            Terminal state — no further transitions allowed.
+                        </div>
+                    }
+                    else
+                    {
+                        <div style="display:flex;flex-wrap:wrap;gap:8px">
+                            @foreach (var s in nexts)
+                            {
+                                <button
+                                    class="btn @BtnKind(s)"
+                                    disabled="@_pending"
+                                    @onclick="() => PatchAsync(s)">
+                                    @(_pending && _pendingTarget == s ? "Working…" : $"→ {s}")
+                                </button>
+                            }
+                        </div>
+                    }
+
+                    @if (_terminalErr is not null && _row is not null)
+                    {
+                        <div class="err-box" style="margin-top:12px">
+                            <strong>@MutationTitle(_terminalErr)</strong>
+                            <div style="margin-top:2px">@(_terminalErr.Problem.Detail ?? _terminalErr.Problem.Title ?? "Request failed.")</div>
+                            @if (_terminalErr.IsSlug("concurrency-conflict"))
+                            {
+                                <div style="margin-top:2px;font-size:11px">Row was refreshed — try again.</div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </aside>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Id { get; set; } = default!;
+    [Parameter] public EventCallback OnClosed { get; set; }
+
+    private const int MaxAttempts = 4;
+    private static readonly TimeSpan[] Backoff = { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4) };
+
+    private InventoryRow? _row;
+    private bool _loadingInitial;
+    private bool _pending;
+    private string? _pendingTarget;
+    private ApiException? _terminalErr;
+    private bool _recovering;
+    private int _attempt;
+    private CancellationTokenSource? _cts;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        await LoadAsync(_cts.Token);
+    }
+
+    private async Task LoadAsync(CancellationToken ct)
+    {
+        _loadingInitial = true;
+        _terminalErr = null;
+        _row = null;
+        StateHasChanged();
+
+        try
+        {
+            _row = await RetryAsync(t => Api.GetAsync(Id, t), ct);
+        }
+        catch (ApiException ex) { _terminalErr = ex; }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _loadingInitial = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task PatchAsync(string status)
+    {
+        if (_row is null || _pending) return;
+        _pending = true;
+        _pendingTarget = status;
+        _terminalErr = null;
+        StateHasChanged();
+
+        try
+        {
+            var ct = _cts?.Token ?? CancellationToken.None;
+            var body = new StatusPatch(status, _row.RowVersion);
+            var res = await RetryAsync(t => Api.PatchStatusAsync(Id, body, t), ct);
+            // Refetch row for the fresh rowVersion + updatedAt. LSN echo
+            // already updated the client watermark via the handler.
+            _row = await Api.GetAsync(Id, ct);
+        }
+        catch (ApiException ex)
+        {
+            _terminalErr = ex;
+            // A stale rowVersion means our snapshot is out of date; pull
+            // the latest so the operator can decide again.
+            if (ex.IsSlug("concurrency-conflict"))
+            {
+                try { _row = await Api.GetAsync(Id, _cts?.Token ?? CancellationToken.None); }
+                catch { /* ignore refetch fail — original err is more useful */ }
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _pending = false;
+            _pendingTarget = null;
+            StateHasChanged();
+        }
+    }
+
+    // Retry only 5xx and network faults. 4xx are terminal (validation,
+    // conflict, not-found) — no point looping.
+    private async Task<T> RetryAsync<T>(Func<CancellationToken, Task<T>> op, CancellationToken ct)
+    {
+        _attempt = 0;
+        _recovering = false;
+        while (true)
+        {
+            try
+            {
+                var r = await op(ct);
+                _recovering = false;
+                return r;
+            }
+            catch (ApiException ex) when (ex.StatusCode >= 500 && _attempt < MaxAttempts - 1)
+            {
+                _attempt++;
+                _recovering = true;
+                StateHasChanged();
+                await Task.Delay(Backoff[Math.Min(_attempt - 1, Backoff.Length - 1)], ct);
+            }
+            catch (HttpRequestException) when (_attempt < MaxAttempts - 1)
+            {
+                _attempt++;
+                _recovering = true;
+                StateHasChanged();
+                await Task.Delay(Backoff[Math.Min(_attempt - 1, Backoff.Length - 1)], ct);
+            }
+        }
+    }
+
+    private void OnBackdrop() { if (!_pending) _ = OnClose(); }
+
+    private Task OnClose() => OnClosed.InvokeAsync();
+
+    private static string[] NextStatuses(string cur) => cur switch
+    {
+        "pending"      => new[] { "active", "disconnected" },
+        "active"       => new[] { "disconnected" },
+        _              => Array.Empty<string>(),
+    };
+
+    private static string BtnKind(string s) => s switch
+    {
+        "disconnected" => "danger",
+        "active"       => "ok",
+        _              => "",
+    };
+
+    private static string MutationTitle(ApiException e) => e.Slug switch
+    {
+        "invalid-status-transition" => "Transition not allowed",
+        "concurrency-conflict"      => "Row changed",
+        "not-found"                 => "Row no longer exists",
+        "validation-failed"         => "Validation failed",
+        "unauthorized"              => "Not authorized",
+        _                           => e.StatusCode >= 500 ? "Server error" : "Request failed",
+    };
+
+    private static string LocationLine(InventoryRow r) =>
+        string.Join(", ", new[] { r.City, r.State }.Where(x => !string.IsNullOrWhiteSpace(x))!) is var s && s.Length > 0 ? s : "—";
+
+    private static string Fmt(DateTimeOffset d) =>
+        d.LocalDateTime.ToString("MMM d, yyyy HH:mm");
+
+    public void Dispose() => _cts?.Cancel();
+}

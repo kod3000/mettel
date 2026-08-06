@@ -1,0 +1,11 @@
+@* Two-column label/value row used inside RowDetailDrawer. *@
+
+<div class="drawer-field">
+    <div class="label">@Label</div>
+    <div style="min-width:0">@ChildContent</div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = default!;
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

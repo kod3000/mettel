@@ -1,0 +1,25 @@
+@* Count line — mirrors CountDisplay.tsx. "Table total" is Postgres'
+   `pg_class.reltuples` estimate refreshed by ANALYZE at bulk-job end;
+   noisy for small uploads, accurate for 100k+ ones. "Filtered" is an
+   exact server-side count after WHERE. *@
+
+<div class="count-line" title="Table total is a Postgres reltuples estimate (refreshed by ANALYZE). Filtered is exact.">
+    @if (Filtered is not null)
+    {
+        <span><span class="filtered">@Filtered.Value.ToString("N0")</span> matching</span>
+    }
+    @if (Total is not null)
+    {
+        <span>Table total <span class="mono">≈ @Total.Value.ToString("N0")</span></span>
+    }
+    @if (TookMs.HasValue)
+    {
+        <span>· @TookMs.Value ms</span>
+    }
+</div>
+
+@code {
+    [Parameter] public CountEnvelope? Filtered { get; set; }
+    [Parameter] public CountEnvelope? Total { get; set; }
+    [Parameter] public long? TookMs { get; set; }
+}

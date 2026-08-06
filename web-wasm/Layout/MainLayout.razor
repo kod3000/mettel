@@ -1,0 +1,27 @@
+@inherits LayoutComponentBase
+@inject TenantContext Tenant
+@implements IDisposable
+
+@* Global shell — top bar with title + client picker. Rerenders on tenant
+   change so the picker label stays in sync, and the child page (Home)
+   also re-keys its data view on tenant change to purge caches. *@
+
+<div class="app-shell">
+    <header class="topbar">
+        <div>
+            <h1>Bruin Inventory Grid</h1>
+            <div class="subtitle">MetTel Bruin Platform — Blazor WebAssembly twin</div>
+        </div>
+        <div class="spacer"></div>
+        <ClientPicker />
+    </header>
+    @Body
+</div>
+
+@code {
+    protected override void OnInitialized() => Tenant.OnChanged += HandleTenantChanged;
+
+    private void HandleTenantChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Tenant.OnChanged -= HandleTenantChanged;
+}
