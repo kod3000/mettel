@@ -19,6 +19,22 @@ const BUILT_IN_OVERRIDE = (import.meta as unknown as {
     env?: { VITE_API_KEY?: string };
 }).env?.VITE_API_KEY;
 
+// Persist the GPU-UI toggle so a user who turned it off on a slow machine
+// isn't surprised by hover animations on the next visit. Mirror the same
+// storage/load shape `tenants.ts` uses for its picker preference.
+const GPU_STORAGE_KEY = "bruin.gpuHover";
+function loadGpuHover(): boolean {
+    if (typeof window === "undefined") return true;
+    const v = window.localStorage.getItem(GPU_STORAGE_KEY);
+    // Only "false" flips it off — any other value (missing, legacy, garbage)
+    // falls back to the default so first-timers still see the animation.
+    return v !== "false";
+}
+function saveGpuHover(on: boolean): void {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(GPU_STORAGE_KEY, on ? "true" : "false");
+}
+
 export default function App() {
     const [tenant, setTenant] = useState<Tenant>(() => loadTenant());
     return <AppShell tenant={tenant} onTenantChange={(t) => { saveTenant(t); setTenant(t); }} />;
@@ -34,7 +50,9 @@ function AppShell({ tenant, onTenantChange }: { tenant: Tenant; onTenantChange: 
     const [apiRefOpen, setApiRefOpen] = useState(false);
     // GPU-UI mode: on by default so first-time users see the animation;
     // toggle off if the machine is slow or the effect is distracting.
-    const [gpuHover, setGpuHover] = useState(true);
+    // Preference persists across refresh via localStorage.
+    const [gpuHover, setGpuHover] = useState<boolean>(() => loadGpuHover());
+    const setGpuHoverPersistent = (v: boolean) => { saveGpuHover(v); setGpuHover(v); };
 
     const apiKey = BUILT_IN_OVERRIDE ?? tenant.apiKey;
 
@@ -57,7 +75,7 @@ function AppShell({ tenant, onTenantChange }: { tenant: Tenant; onTenantChange: 
                             <h1 className="text-base font-semibold tracking-tight">Bruin Inventory Grid</h1>
                             <p className="text-xs text-slate-500">MetTel Bruin Platform — fun-times</p>
                         </div>
-                        <GpuToggle value={gpuHover} onChange={setGpuHover} />
+                        <GpuToggle value={gpuHover} onChange={setGpuHoverPersistent} />
                         <ClientPicker value={tenant} onChange={onTenantChange} />
                         <button
                             type="button"
