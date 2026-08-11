@@ -10,10 +10,12 @@
     <BlazorWebAssemblyLoadAllGlobalizationData>false</BlazorWebAssemblyLoadAllGlobalizationData>
   </PropertyGroup>
 
-  <!-- AOT only when publishing a release build with PublishAOT=true. Local
+  <!-- AOT only when publishing a release build with BlazorWasmAot=true. Local
        `dotnet run` stays interpreted so dev iteration is fast and the
-       wasm-tools workload isn't required to be installed. -->
-  <PropertyGroup Condition="'$(Configuration)'=='Release' and '$(PublishAOT)'=='true'">
+       wasm-tools workload isn't required to be installed. Uses a custom
+       property name because .NET's built-in `PublishAOT` is Native AOT and
+       errors out on the browser-wasm RID before our condition can fire. -->
+  <PropertyGroup Condition="'$(Configuration)'=='Release' and '$(BlazorWasmAot)'=='true'">
     <RunAOTCompilation>true</RunAOTCompilation>
   </PropertyGroup>
 

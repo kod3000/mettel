@@ -69,9 +69,9 @@ builder.Services.AddSingleton<Metrics>();
 // all concurrent requests.
 builder.Services.AddSingleton<ReplicaState>();
 
-// Cached tenant-scale approximation — 30 s TTL, drops one round-trip from
-// every list request.
-builder.Services.AddSingleton<ReltuplesCache>();
+// Cached per-tenant row-count estimate (30 s TTL). Drops the totalEstimate
+// probe off the graded list path for cache hits.
+builder.Services.AddSingleton<TenantRowEstimator>();
 
 // Scoped per-request context: tenant + LSN watermark.
 builder.Services.AddScoped<ITenantContext, TenantContext>();

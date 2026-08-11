@@ -60,15 +60,17 @@ directly. Hot-reload works via `dotnet watch run` if you want it.
 
 ```sh
 cd web-wasm
-dotnet publish -c Release -p:PublishAOT=true
+dotnet publish -c Release -p:BlazorWasmAot=true
 ```
 
 Output lands under `bin/Release/net9.0/publish/wwwroot/`. That's what
 gets rsync'd to the deploy host.
 
-Skip `-p:PublishAOT=true` for a smaller/interpreted release build — it
-ships faster (~2 MB) but has slower steady-state throughput. AOT is the
-honest baseline for perf comparisons.
+Skip `-p:BlazorWasmAot=true` for a smaller/interpreted release build —
+it ships faster (~2 MB) but has slower steady-state throughput. AOT is
+the honest baseline for perf comparisons. (The property is our own,
+gating `RunAOTCompilation` — we avoid the reserved `PublishAOT` name
+because that triggers .NET Native AOT which errors on `browser-wasm`.)
 
 ## Deploy
 

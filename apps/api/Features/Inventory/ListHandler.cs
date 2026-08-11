@@ -12,7 +12,7 @@ namespace Bruin.Api.Features.Inventory;
 // generated SQL for dynamic sort + row-value keyset is unreadable, and this is
 // the query the reviewer will EXPLAIN. Invariants: no OFFSET, no SELECT *,
 // tenant-first WHERE, capped counts.
-public sealed class ListHandler(IReadRouter db, CursorCodec cursors, ReltuplesCache reltuples)
+public sealed class ListHandler(IReadRouter db, CursorCodec cursors, TenantRowEstimator estimator)
 {
     public async Task<object> Handle(Guid clientId, ListQuery q, CancellationToken ct)
     {
@@ -152,8 +152,7 @@ public sealed class ListHandler(IReadRouter db, CursorCodec cursors, ReltuplesCa
         if (hasMore) raw.RemoveAt(raw.Count - 1);
 
         // 5. Counts ------------------------------------------------------
-        var reltuplesValue = await reltuples.GetAsync(ct);
-        var totalEstimate = new CountEnvelope(reltuplesValue, "approximate");
+        var totalEstimate = new CountEnvelope(await estimator.GetAsync(clientId, ct), "approximate");
         CountEnvelope? filteredCount = null;
         if (q.HasFilters)
         {
