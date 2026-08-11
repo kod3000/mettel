@@ -17,6 +17,21 @@ body,
 
 body {
     color-scheme: light;
+    /* Prevent the browser's back/forward swipe gesture (macOS trackpad two-
+       finger horizontal swipe, Windows precision-touchpad edge swipes) from
+       firing when the user pans horizontally in the grid. `overscroll-behavior:
+       none` stops overscroll from chaining out of the document to the browser
+       chrome, which is what triggers the navigation gesture. Also kills the
+       rubber-band bounce on iOS/macOS — fine for a data-grid app. */
+    overscroll-behavior: none;
+}
+
+/* Belt-and-suspenders for the grid scroll containers themselves: `contain`
+   allows internal scroll to still work as expected but blocks chain-out
+   navigation even if a nested element accidentally overrides body. */
+.overflow-x-auto,
+.overflow-auto {
+    overscroll-behavior-x: contain;
 }
 
 /* GPU-accelerated row hover. Springy overshoot easing so hover-in bulges

@@ -1,8 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { ApiContext } from "./api/context.js";
 import { createClient, inMemoryLsnStore } from "./api/client.js";
 import { InventoryGrid } from "./components/InventoryGrid.js";
+// PixiJS is ~150KB gzipped — lazy-imported so users on the DOM grid never
+// pay the download cost. The Suspense fallback is a plain skeleton because
+// the chunk is small enough (over a warm connection) that a heavier
+// spinner would be visible longer than the load itself.
+const InventoryGridGpu = lazy(() =>
+    import("./components/InventoryGridGpu.js").then((m) => ({ default: m.InventoryGridGpu })),
+);
 import { Filters } from "./components/Filters.js";
 import { CreateInventoryModal } from "./components/CreateInventoryModal.js";
 import { SavedViewsBar } from "./components/SavedViewsBar.js";
@@ -24,11 +31,12 @@ const BUILT_IN_OVERRIDE = (import.meta as unknown as {
 // storage/load shape `tenants.ts` uses for its picker preference.
 const GPU_STORAGE_KEY = "bruin.gpuHover";
 function loadGpuHover(): boolean {
-    if (typeof window === "undefined") return true;
+    if (typeof window === "undefined") return false;
     const v = window.localStorage.getItem(GPU_STORAGE_KEY);
-    // Only "false" flips it off — any other value (missing, legacy, garbage)
-    // falls back to the default so first-timers still see the animation.
-    return v !== "false";
+    // Default OFF: GPU mode now swaps the DOM grid body for a PixiJS canvas,
+    // which is inaccessible to screen readers. Opt-in only. Persisted after
+    // the user flips it on.
+    return v === "true";
 }
 function saveGpuHover(on: boolean): void {
     if (typeof window === "undefined") return;
@@ -53,6 +61,22 @@ function AppShell({ tenant, onTenantChange }: { tenant: Tenant; onTenantChange: 
     // Preference persists across refresh via localStorage.
     const [gpuHover, setGpuHover] = useState<boolean>(() => loadGpuHover());
     const setGpuHoverPersistent = (v: boolean) => { saveGpuHover(v); setGpuHover(v); };
+
+    // Confirm-before-leave. Fires on tab close, refresh, URL change, back
+    // button, and cross-origin link clicks. Browsers ignore any custom
+    // message and show their own text; the empty `returnValue` assignment
+    // is the trigger. Modern browsers also gate this on a "user activation"
+    // — the prompt only appears once the user has interacted with the page,
+    // so a first-load reload before any click is silent (which is what we
+    // want; nothing to lose yet).
+    useEffect(() => {
+        const onBeforeUnload = (e: BeforeUnloadEvent) => {
+            e.preventDefault();
+            e.returnValue = "";
+        };
+        window.addEventListener("beforeunload", onBeforeUnload);
+        return () => window.removeEventListener("beforeunload", onBeforeUnload);
+    }, []);
 
     const apiKey = BUILT_IN_OVERRIDE ?? tenant.apiKey;
 
@@ -98,12 +122,28 @@ function AppShell({ tenant, onTenantChange }: { tenant: Tenant; onTenantChange: 
                     <BulkUploadPanel apiKey={apiKey} />
                     <Filters value={params} onChange={setParams} />
                     <div className="flex-1 min-h-0">
-                        <InventoryGrid
-                            params={params}
-                            onParamsChange={setParams}
-                            onRowSelect={setSelectedRow}
-                            gpuHover={gpuHover}
-                        />
+                        {gpuHover ? (
+                            <Suspense
+                                fallback={
+                                    <div className="h-full flex items-center justify-center text-sm text-slate-500">
+                                        Loading GPU renderer…
+                                    </div>
+                                }
+                            >
+                                <InventoryGridGpu
+                                    params={params}
+                                    onParamsChange={setParams}
+                                    onRowSelect={setSelectedRow}
+                                />
+                            </Suspense>
+                        ) : (
+                            <InventoryGrid
+                                params={params}
+                                onParamsChange={setParams}
+                                onRowSelect={setSelectedRow}
+                                gpuHover={false}
+                            />
+                        )}
                     </div>
                     <CreateInventoryModal open={createOpen} onClose={() => setCreateOpen(false)} />
                     {selectedRow && (
@@ -129,7 +169,7 @@ function GpuToggle({ value, onChange }: { value: boolean; onChange: (v: boolean)
     return (
         <label
             className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none"
-            title="Enable GPU-accelerated row hover animations. Turn off for maximum scroll performance."
+            title="Render the grid body on the GPU via PixiJS (WebGPU/WebGL). Turn off to use the DOM grid — required for screen readers and full keyboard nav."
         >
             <span className="text-slate-500">GPU UI</span>
             <button

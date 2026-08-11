@@ -24,6 +24,18 @@ interface RateWindow {
     uploadBytes: number;
 }
 
+// Live upload state — populated by XHR's upload.onprogress before the
+// server responds with a jobId. Lets us render a progress bar during the
+// POST itself, which for a 50 MB file over a residential uplink can be
+// many seconds of otherwise-blank UI. `fetch()` doesn't expose upload
+// progress; XHR does.
+interface UploadProgress {
+    fileName: string;
+    loaded: number;   // bytes sent so far
+    total: number;    // total bytes (0 = unknown / not-computable)
+    startedAtMs: number;
+}
+
 interface Props {
     // Passed from App so bulk upload uses the same key as everything else in
     // the tree — no fallbacks, no reaching into the ApiClient's internals.
@@ -37,6 +49,7 @@ export function BulkUploadPanel({ apiKey }: Props) {
     const [phase, setPhase] = useState<"idle" | "uploading" | "streaming" | "polling" | "done" | "error">("idle");
     const [error, setError] = useState<string | null>(null);
     const [rate, setRate] = useState<RateWindow | null>(null);
+    const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
 
     async function upload() {
         const file = fileRef.current?.files?.[0];
@@ -45,17 +58,25 @@ export function BulkUploadPanel({ apiKey }: Props) {
         setPhase("uploading");
         setJob(null);
         setRate(null);
+        setUploadProgress({
+            fileName: file.name,
+            loaded: 0,
+            total: file.size,
+            startedAtMs: Date.now(),
+        });
         try {
-            const form = new FormData();
-            form.append("file", file);
+            // XHR (not fetch) because we need upload.onprogress events —
+            // fetch's Request body doesn't emit progress even with a
+            // ReadableStream on Chrome without HTTP/2 duplex which is
+            // gated behind an experimental flag.
             const uploadStart = Date.now();
-            const res = await fetch("/api/v1/bulk-jobs", {
-                method: "POST",
-                headers: { "X-Api-Key": apiKey },
-                body: form,
-            });
-            if (!res.ok) throw new Error(await res.text());
-            const body = await res.json() as { jobId: string; status: string };
+            const body = await postWithProgress(
+                "/api/v1/bulk-jobs",
+                { "X-Api-Key": apiKey },
+                file,
+                (loaded, total) => setUploadProgress((p) => p ? { ...p, loaded, total } : p),
+            );
+            setUploadProgress(null);
             const initial: JobSnapshot = {
                 jobId: body.jobId, status: body.status, fileName: file.name,
                 totalRows: 0, processedRows: 0, succeededRows: 0, failedRows: 0,
@@ -73,6 +94,7 @@ export function BulkUploadPanel({ apiKey }: Props) {
             });
             await streamProgress(body.jobId, initial);
         } catch (e: unknown) {
+            setUploadProgress(null);
             setError((e as Error).message ?? "upload failed");
             setPhase("error");
         }
@@ -178,9 +200,80 @@ export function BulkUploadPanel({ apiKey }: Props) {
             >
                 Sample 500k CSV
             </a>
+            {uploadProgress && !job && <UploadProgressBar up={uploadProgress} />}
             {job && rate && <ProgressBar job={job} rate={rate} phase={phase} error={error} />}
         </div>
     );
+}
+
+// Rendered while the POST body is streaming to the server (before the 202
+// response comes back with a jobId). Once we have a jobId, the richer
+// ProgressBar takes over.
+function UploadProgressBar({ up }: { up: UploadProgress }) {
+    const pct = up.total > 0 ? Math.min(100, Math.round((up.loaded / up.total) * 100)) : 0;
+    const elapsedSec = Math.max(0.001, (Date.now() - up.startedAtMs) / 1000);
+    const mbps = (up.loaded / 1024 / 1024) / elapsedSec;
+    return (
+        <div className="ml-auto flex items-center gap-3 text-xs text-slate-600" data-testid="upload-progress">
+            <span className="truncate max-w-[220px]">
+                {up.fileName} <span className="text-slate-400">(uploading)</span>
+            </span>
+            <div className="flex items-center gap-2">
+                <div className="w-40 h-2 bg-slate-100 rounded-full overflow-hidden">
+                    <div
+                        className="h-full bg-sky-500 transition-[width] duration-150"
+                        style={{ width: `${pct}%` }}
+                    />
+                </div>
+                <span className="tabular-nums text-slate-500 w-9 text-right">{pct}%</span>
+            </div>
+            <span className="tabular-nums text-slate-500">
+                {(up.loaded / 1024 / 1024).toFixed(1)} / {(up.total / 1024 / 1024).toFixed(1)} MB
+            </span>
+            {mbps > 0.05 && (
+                <span className="tabular-nums text-slate-400" title="Wire throughput of the POST body">
+                    {mbps.toFixed(1)} MB/s
+                </span>
+            )}
+        </div>
+    );
+}
+
+// Fetch equivalent that surfaces upload progress via XHR events. Returns
+// the parsed 202 body ({jobId, status}) or throws with the server's
+// response text on non-2xx.
+function postWithProgress(
+    url: string,
+    headers: Record<string, string>,
+    file: File,
+    onProgress: (loaded: number, total: number) => void,
+): Promise<{ jobId: string; status: string }> {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", url, true);
+        for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+        xhr.upload.onprogress = (e) => {
+            // lengthComputable is false when Content-Length isn't known;
+            // for a File-based multipart it's always known. Guard anyway.
+            if (e.lengthComputable) onProgress(e.loaded, e.total);
+        };
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                try { resolve(JSON.parse(xhr.responseText)); }
+                catch { reject(new Error("invalid response JSON")); }
+            } else {
+                reject(new Error(xhr.responseText || `HTTP ${xhr.status}`));
+            }
+        };
+        xhr.onerror = () => reject(new Error("network error during upload"));
+        xhr.onabort = () => reject(new Error("upload aborted"));
+
+        // Send the file inside a multipart form (matches what the server's
+        // ReadFormAsync expects — see BulkJobEndpoints.AcceptUploadAsync).
+        const form = new FormData();
+        form.append("file", file);
+        xhr.send(form);
+    });
 }
 
 function ProgressBar({ job, rate, phase, error }: {

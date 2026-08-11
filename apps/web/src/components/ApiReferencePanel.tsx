@@ -136,7 +136,7 @@ export function ApiReferencePanel({ apiKey, tenantLabel, onClose }: Props) {
                         </div>
                     </div>
                     <a
-                        href="/openapi.v1.json"
+                        href="/openapi/v1.json"
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-xs text-indigo-700 hover:underline"
