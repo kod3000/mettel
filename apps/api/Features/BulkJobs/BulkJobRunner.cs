@@ -306,11 +306,12 @@ public sealed class BulkJobRunner : BackgroundService
                 completed_at = now()
             WHERE id = '" + jobId + "'::uuid");
 
-        // Refresh pg_class.reltuples so the grid's "Table total" reflects the
-        // new row count. Plain INSERT doesn't move reltuples — autovacuum
-        // ANALYZE only trips at ~10 % churn, which for a 5 M-row table means
-        // ~500 k inserts. A bulk job of any size might land under that
-        // threshold, so nudge the planner + the ReltuplesCache readers here.
+        // Refresh planner statistics so the grid's per-tenant "Table total"
+        // reflects the new row count. Plain INSERT doesn't move pg_statistic
+        // — autovacuum ANALYZE only trips at ~10 % churn, which for a 5 M-row
+        // table means ~500 k inserts. A bulk job of any size might land under
+        // that threshold, so nudge the planner + the TenantRowEstimator
+        // (which reads EXPLAIN Plan Rows off pg_statistic) here.
         // Cost is a stats sample — bounded, ~seconds even on the 5 M table.
         try
         {
