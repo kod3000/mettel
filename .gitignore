@@ -20,7 +20,6 @@ dist/
 *.pem
 
 # Postgres data (in case someone tries a bind mount by accident)
-data/
 pg-primary-data/
 pg-replica-data/
 
