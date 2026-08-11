@@ -1,0 +1,295 @@
+@inject BruinApiClient Api
+@inject TenantContext Tenant
+@inject IJSRuntime JS
+@implements IDisposable
+
+@* Bulk CSV upload with live progress. Matches the React SPA:
+     1. Upload phase — POST the multipart form.
+     2. Streaming phase — SSE feed of BulkJobStatus snapshots.
+     3. If SSE drops, fall back to polling GET /bulk-jobs/{id}.
+
+   Unlike the React app, HttpClient in Blazor WASM doesn't expose
+   upload-progress callbacks (no per-byte XHR-style events), so the
+   "uploading" bar is a coarse indeterminate slider instead of a
+   real % bar. Once the server accepts the job the SSE frames drive
+   an exact progress bar identical to the React one. *@
+
+<div class="bulk-panel">
+    <span style="color:var(--slate-500);font-size:11px">Bulk upload</span>
+
+    <InputFile OnChange="OnFilePicked" accept=".csv,text/csv" class="bulk-file" />
+
+    <button type="button" class="btn" style="font-size:11px;padding:2px 10px;background:var(--slate-800);color:white;border-color:var(--slate-800)"
+            disabled="@(_file is null || _phase is Phase.Uploading or Phase.Streaming or Phase.Polling)"
+            @onclick="UploadAsync">Upload</button>
+
+    <a href="javascript:void(0)" @onclick="DownloadTemplateAsync" style="color:var(--indigo-600);font-size:11px;text-decoration:underline">CSV template</a>
+    <a href="javascript:void(0)" @onclick="DownloadSampleAsync"
+       title="~50 MB stream of realistic rows for load-testing the bulk upload path"
+       style="color:var(--indigo-600);font-size:11px;text-decoration:underline">Sample 500k CSV</a>
+
+    @if (_phase == Phase.Uploading && _file is not null)
+    {
+        <div class="bulk-progress" data-testid="upload-progress">
+            <span class="filename">@_file.Name <span style="color:var(--slate-400)">(uploading)</span></span>
+            <div class="bar">
+                <div class="bar-inner indeterminate"></div>
+            </div>
+            <span class="tabular" style="color:var(--slate-500)">@FormatBytes(_file.Size)</span>
+        </div>
+    }
+    else if (_job is not null)
+    {
+        <div class="bulk-progress">
+            <span class="filename">@_job.FileName <span style="color:var(--slate-400)">(@_phase.ToString().ToLowerInvariant())</span></span>
+            <div class="bar">
+                <div class="bar-inner" style="width:@Pct(_job)%;background:@BarColor(_job.Status)"></div>
+            </div>
+            <span class="tabular" style="color:var(--slate-500);width:32px;text-align:right">@Pct(_job)%</span>
+            <span class="tabular">
+                <span style="color:var(--emerald-700)">@_job.SucceededRows.ToString("N0")</span>
+                <span style="color:var(--slate-400)"> ok / </span>
+                <span style="color:var(--rose-700)">@_job.FailedRows.ToString("N0")</span>
+                <span style="color:var(--slate-400)"> err</span>
+            </span>
+            <span class="tabular" style="color:var(--slate-500)" title="Rolling rows/sec (last snapshot)">
+                @FormatRate(_instantRps) r/s
+            </span>
+            @if (!IsTerminal(_job.Status) && _avgRps > 0)
+            {
+                <span class="tabular" style="color:var(--slate-500)" title="ETA at current average rate">
+                    ETA @FormatDuration(EtaSec())
+                </span>
+            }
+            @if (IsTerminal(_job.Status))
+            {
+                <span class="tabular" style="color:var(--slate-500)" title="Total wall-clock elapsed">
+                    in @FormatDuration((DateTimeOffset.UtcNow - _startedAt).TotalSeconds)
+                </span>
+            }
+            @if (_job.Status == "completedWithErrors" && !string.IsNullOrEmpty(_job.ErrorSampleUrl))
+            {
+                <a href="javascript:void(0)" @onclick="() => DownloadErrorSampleAsync(_job)"
+                   style="color:var(--indigo-600);font-size:11px;text-decoration:underline">error CSV</a>
+            }
+            @if (_error is not null)
+            {
+                <span style="color:var(--rose-700)">@_error</span>
+            }
+        </div>
+    }
+</div>
+
+<style>
+    .bulk-panel {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+        padding: 6px 16px; background: white;
+        border-bottom: 1px solid var(--slate-200); font-size: 11px;
+    }
+    .bulk-file { font-size: 11px; }
+    .bulk-file::file-selector-button {
+        margin-right: 6px; border: 0; border-radius: 4px;
+        background: var(--slate-100); color: var(--slate-700);
+        font-size: 11px; padding: 2px 8px; font-weight: 500; cursor: pointer;
+    }
+    .bulk-file::file-selector-button:hover { background: var(--slate-200); }
+    .bulk-progress {
+        margin-left: auto; display: flex; align-items: center; gap: 10px;
+        color: var(--slate-600);
+    }
+    .bulk-progress .filename { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bulk-progress .bar { width: 160px; height: 8px; background: var(--slate-100); border-radius: 999px; overflow: hidden; }
+    .bulk-progress .bar-inner { height: 100%; transition: width 200ms ease; background: var(--indigo-500); }
+    .bulk-progress .bar-inner.indeterminate {
+        width: 40%; background: linear-gradient(90deg, transparent, var(--indigo-500), transparent);
+        animation: slide 1400ms linear infinite;
+    }
+    @@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+</style>
+
+@code {
+    private enum Phase { Idle, Uploading, Streaming, Polling, Done, Error }
+
+    private IBrowserFile? _file;
+    private Phase _phase = Phase.Idle;
+    private BulkJobStatus? _job;
+    private string? _error;
+    private DateTimeOffset _startedAt;
+    private int _lastProcessed;
+    private DateTimeOffset _lastSnapAt;
+    private double _instantRps;
+    private double _avgRps;
+    private CancellationTokenSource? _cts;
+
+    private void OnFilePicked(InputFileChangeEventArgs e)
+    {
+        _file = e.File;
+        _error = null;
+        _job = null;
+        _phase = Phase.Idle;
+    }
+
+    private async Task UploadAsync()
+    {
+        if (_file is null) return;
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+        _error = null;
+        _job = null;
+        _phase = Phase.Uploading;
+        _startedAt = DateTimeOffset.UtcNow;
+        _lastProcessed = 0;
+        _lastSnapAt = _startedAt;
+        _instantRps = 0;
+        _avgRps = 0;
+        StateHasChanged();
+
+        try
+        {
+            // MaxAllowedSize covers up to 200 MB — matches API cap.
+            using var stream = _file.OpenReadStream(maxAllowedSize: 200 * 1024 * 1024, ct);
+            var accepted = await Api.PostBulkJobAsync(
+                stream, _file.Name, string.IsNullOrEmpty(_file.ContentType) ? "text/csv" : _file.ContentType,
+                progress: null, ct);
+
+            _job = new BulkJobStatus(
+                JobId: accepted.JobId, Status: accepted.Status, FileName: _file.Name,
+                TotalRows: 0, ProcessedRows: 0, SucceededRows: 0, FailedRows: 0,
+                ErrorSampleUrl: $"/api/v1/bulk-jobs/{accepted.JobId}/errors");
+
+            await StreamAsync(accepted.JobId, ct);
+        }
+        catch (OperationCanceledException) { _phase = Phase.Idle; }
+        catch (ApiException ex) { _error = ex.Problem.Detail ?? ex.Problem.Title ?? "upload failed"; _phase = Phase.Error; }
+        catch (Exception ex)    { _error = ex.Message; _phase = Phase.Error; }
+        finally { StateHasChanged(); }
+    }
+
+    private async Task StreamAsync(string jobId, CancellationToken ct)
+    {
+        _phase = Phase.Streaming;
+        StateHasChanged();
+        try
+        {
+            await foreach (var snap in Api.StreamBulkJobEventsAsync(jobId, ct))
+            {
+                UpdateRate(snap);
+                _job = snap;
+                StateHasChanged();
+                if (IsTerminal(snap.Status))
+                {
+                    _phase = Phase.Done;
+                    StateHasChanged();
+                    return;
+                }
+            }
+            // Stream ended without a terminal frame — fall back to polling.
+            await PollAsync(jobId, ct);
+        }
+        catch (OperationCanceledException) { _phase = Phase.Idle; }
+        catch
+        {
+            // Any SSE hiccup — fall through to polling instead of failing.
+            await PollAsync(jobId, ct);
+        }
+    }
+
+    private async Task PollAsync(string jobId, CancellationToken ct)
+    {
+        _phase = Phase.Polling;
+        StateHasChanged();
+        for (var i = 0; i < 240; i++)
+        {
+            try
+            {
+                var snap = await Api.GetBulkJobAsync(jobId, ct);
+                UpdateRate(snap);
+                _job = snap;
+                StateHasChanged();
+                if (IsTerminal(snap.Status))
+                {
+                    _phase = Phase.Done;
+                    StateHasChanged();
+                    return;
+                }
+            }
+            catch { /* keep polling */ }
+            await Task.Delay(500, ct);
+        }
+        _error = "polling timeout — check job status manually";
+        _phase = Phase.Error;
+        StateHasChanged();
+    }
+
+    private void UpdateRate(BulkJobStatus snap)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var dSec = Math.Max(0.001, (now - _lastSnapAt).TotalSeconds);
+        var dRows = Math.Max(0, snap.ProcessedRows - _lastProcessed);
+        _instantRps = dRows / dSec;
+        var elapsedSec = Math.Max(0.001, (now - _startedAt).TotalSeconds);
+        _avgRps = snap.ProcessedRows / elapsedSec;
+        _lastProcessed = snap.ProcessedRows;
+        _lastSnapAt = now;
+    }
+
+    private double EtaSec()
+    {
+        if (_job is null || _avgRps <= 0) return 0;
+        var total = Math.Max(_job.TotalRows, _job.ProcessedRows);
+        var remaining = Math.Max(0, total - _job.ProcessedRows);
+        return remaining / _avgRps;
+    }
+
+    private static int Pct(BulkJobStatus j)
+    {
+        var total = Math.Max(Math.Max(j.TotalRows, j.ProcessedRows), 1);
+        return Math.Min(100, (int)Math.Round(100.0 * j.ProcessedRows / total));
+    }
+
+    private static string BarColor(string status) => status switch
+    {
+        "failed"              => "var(--rose-500)",
+        "completedWithErrors" => "#f59e0b",
+        "completed"           => "#10b981",
+        _                     => "var(--indigo-500)",
+    };
+
+    private static bool IsTerminal(string s) =>
+        s is "completed" or "completedWithErrors" or "failed";
+
+    private static string FormatBytes(long n)
+    {
+        if (n >= 1024 * 1024) return $"{n / 1024.0 / 1024.0:F1} MB";
+        if (n >= 1024)        return $"{n / 1024.0:F1} KB";
+        return $"{n} B";
+    }
+    private static string FormatRate(double v)
+    {
+        if (v >= 10_000) return $"{v / 1000:F1}k";
+        if (v >= 1_000)  return $"{v / 1000:F2}k";
+        return v < 1 ? "0" : Math.Round(v).ToString();
+    }
+    private static string FormatDuration(double sec)
+    {
+        if (double.IsNaN(sec) || sec < 0) return "—";
+        if (sec < 60)   return $"{Math.Round(sec)}s";
+        if (sec < 3600) return $"{(int)(sec / 60)}m {(int)(sec % 60)}s";
+        return $"{(int)(sec / 3600)}h {(int)((sec % 3600) / 60)}m";
+    }
+
+    private async Task DownloadTemplateAsync() =>
+        await JS.InvokeVoidAsync("bruinDownload.fromUrl", "/api/v1/inventory/csv-template", Tenant.Current.ApiKey, "inventory-template.csv");
+
+    private async Task DownloadSampleAsync() =>
+        await JS.InvokeVoidAsync("bruinDownload.fromUrl", "/api/v1/inventory/csv-sample?rows=500000", Tenant.Current.ApiKey, "bruin-sample-500k.csv");
+
+    private async Task DownloadErrorSampleAsync(BulkJobStatus j)
+    {
+        if (string.IsNullOrEmpty(j.ErrorSampleUrl)) return;
+        await JS.InvokeVoidAsync("bruinDownload.fromUrl", j.ErrorSampleUrl, Tenant.Current.ApiKey, $"bruin-errors-{j.JobId}.csv");
+    }
+
+    public void Dispose() => _cts?.Cancel();
+}

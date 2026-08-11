@@ -2,11 +2,13 @@
 @inject TenantContext Tenant
 @implements IDisposable
 
-@* Home page — filters + grid + optional row-detail drawer. Rekeyed on
-   tenant change so every child state (grid rows, drawer selection) is
-   torn down cleanly instead of leaking cross-tenant data. *@
+@* Home — SavedViewsBar + BulkUploadPanel + Filters + Grid + drawers.
+   Layout order mirrors the React SPA. Everything below the topbar is
+   inside a @key'd wrapper so a tenant flip tears down state cleanly. *@
 
 <div @key="Tenant.Current.Id" style="display:flex;flex-direction:column;flex:1;min-height:0">
+    <SavedViewsBar Params="_params" OnApply="OnParamsChange" />
+    <BulkUploadPanel />
     <Filters Value="_params" ValueChanged="OnParamsChange" />
     <div style="flex:1;min-height:0;display:flex;flex-direction:column">
         <InventoryGrid
@@ -17,22 +19,42 @@
     </div>
 </div>
 
+<CreateInventoryModal Open="_createOpen" OnClosed="CloseCreate" OnCreated="OnCreated" />
+
 @if (_selectedId is not null)
 {
     <RowDetailDrawer Id="@_selectedId" OnClosed="CloseDrawer" />
 }
 
+@if (_apiRefOpen)
+{
+    <ApiReferencePanel OnClosed="CloseApiRef" />
+}
+
 @code {
+    [CascadingParameter] public AppActions? Actions { get; set; }
+
     private BruinApiClient.ListParams _params = new(PageSize: 100);
     private string? _selectedId;
+    private bool _createOpen;
+    private bool _apiRefOpen;
 
-    protected override void OnInitialized() => Tenant.OnChanged += OnTenantChanged;
+    protected override void OnInitialized()
+    {
+        Tenant.OnChanged += OnTenantChanged;
+        if (Actions is not null)
+        {
+            Actions.OpenCreateRequested += OpenCreate;
+            Actions.OpenApiRefRequested += OpenApiRef;
+        }
+    }
 
     private void OnTenantChanged()
     {
-        // Reset to a fresh state — the @key handles child remount.
         _params = new(PageSize: 100);
         _selectedId = null;
+        _createOpen = false;
+        _apiRefOpen = false;
         InvokeAsync(StateHasChanged);
     }
 
@@ -42,17 +64,23 @@
         StateHasChanged();
     }
 
-    private void OnRowClick(InventoryRow row)
-    {
-        _selectedId = row.Id;
-        StateHasChanged();
-    }
+    private void OnRowClick(InventoryRow row) { _selectedId = row.Id; StateHasChanged(); }
+    private void CloseDrawer() { _selectedId = null; StateHasChanged(); }
 
-    private void CloseDrawer()
-    {
-        _selectedId = null;
-        StateHasChanged();
-    }
+    private void OpenCreate()  { _createOpen = true;  InvokeAsync(StateHasChanged); }
+    private void CloseCreate() { _createOpen = false; StateHasChanged(); }
+    private void OnCreated(InventoryRow _) { /* Grid auto-refetches on param change; nothing to do */ }
 
-    public void Dispose() => Tenant.OnChanged -= OnTenantChanged;
+    private void OpenApiRef()  { _apiRefOpen = true;  InvokeAsync(StateHasChanged); }
+    private void CloseApiRef() { _apiRefOpen = false; StateHasChanged(); }
+
+    public void Dispose()
+    {
+        Tenant.OnChanged -= OnTenantChanged;
+        if (Actions is not null)
+        {
+            Actions.OpenCreateRequested -= OpenCreate;
+            Actions.OpenApiRefRequested -= OpenApiRef;
+        }
+    }
 }

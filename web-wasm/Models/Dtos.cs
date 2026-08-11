@@ -52,4 +52,54 @@ public sealed record ProblemDetails(
     [property: JsonPropertyName("title")]    string? Title,
     [property: JsonPropertyName("status")]   int?    Status,
     [property: JsonPropertyName("detail")]   string? Detail,
-    [property: JsonPropertyName("instance")] string? Instance);
+    [property: JsonPropertyName("instance")] string? Instance,
+    // ASP.NET Core validation errors ship a `errors` object keyed by
+    // property name → array of messages. Not in the base RFC 7807 shape
+    // but universal in .NET APIs; the CreateInventoryModal renders these
+    // inline against the offending field.
+    [property: JsonPropertyName("errors")]   Dictionary<string, string[]>? Errors = null);
+
+public sealed record CreateRequest(
+    [property: JsonPropertyName("serviceNumber")]   string? ServiceNumber,
+    [property: JsonPropertyName("productCategory")] string? ProductCategory,
+    [property: JsonPropertyName("productName")]     string? ProductName,
+    [property: JsonPropertyName("status")]          string? Status,
+    [property: JsonPropertyName("city")]            string? City = null,
+    [property: JsonPropertyName("state")]           string? State = null,
+    [property: JsonPropertyName("address")]         string? Address = null,
+    [property: JsonPropertyName("assignee")]        string? Assignee = null,
+    [property: JsonPropertyName("notes")]           string? Notes = null);
+
+public sealed record SavedView(
+    [property: JsonPropertyName("id")]        string? Id,
+    [property: JsonPropertyName("name")]      string Name,
+    [property: JsonPropertyName("filters")]   string Filters,
+    [property: JsonPropertyName("sort")]      string? Sort,
+    [property: JsonPropertyName("columns")]   string? Columns,
+    [property: JsonPropertyName("createdAt")] DateTimeOffset? CreatedAt = null,
+    [property: JsonPropertyName("updatedAt")] DateTimeOffset? UpdatedAt = null);
+
+public sealed record SavedViewList(
+    [property: JsonPropertyName("views")] IReadOnlyList<SavedView> Views);
+
+public sealed record SavedViewUpsert(
+    [property: JsonPropertyName("name")]    string Name,
+    [property: JsonPropertyName("filters")] string Filters,
+    [property: JsonPropertyName("sort")]    string? Sort = null,
+    [property: JsonPropertyName("columns")] string? Columns = null);
+
+public sealed record BulkJobAccepted(
+    [property: JsonPropertyName("jobId")]  string JobId,
+    [property: JsonPropertyName("status")] string Status);
+
+public sealed record BulkJobStatus(
+    [property: JsonPropertyName("jobId")]          string JobId,
+    [property: JsonPropertyName("status")]         string Status,
+    [property: JsonPropertyName("fileName")]       string? FileName,
+    [property: JsonPropertyName("totalRows")]      int TotalRows,
+    [property: JsonPropertyName("processedRows")]  int ProcessedRows,
+    [property: JsonPropertyName("succeededRows")]  int SucceededRows,
+    [property: JsonPropertyName("failedRows")]     int FailedRows,
+    [property: JsonPropertyName("startedAt")]      DateTimeOffset? StartedAt = null,
+    [property: JsonPropertyName("completedAt")]    DateTimeOffset? CompletedAt = null,
+    [property: JsonPropertyName("errorSampleUrl")] string? ErrorSampleUrl = null);

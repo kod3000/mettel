@@ -66,6 +66,118 @@ public sealed class BruinApiClient
         return (await res.Content.ReadFromJsonAsync<StatusChangeResponse>(Json, ct))!;
     }
 
+    public async Task<InventoryRow> CreateAsync(CreateRequest body, CancellationToken ct = default)
+    {
+        using var res = await _http.PostAsJsonAsync("api/v1/inventory", body, Json, ct);
+        await ThrowIfProblem(res, ct);
+        return (await res.Content.ReadFromJsonAsync<InventoryRow>(Json, ct))!;
+    }
+
+    // ---- Saved views ----------------------------------------------------
+
+    public async Task<SavedViewList> ListSavedViewsAsync(CancellationToken ct = default)
+    {
+        using var res = await _http.GetAsync("api/v1/saved-views", ct);
+        await ThrowIfProblem(res, ct);
+        return (await res.Content.ReadFromJsonAsync<SavedViewList>(Json, ct))!;
+    }
+
+    public async Task<SavedView> CreateSavedViewAsync(SavedViewUpsert body, CancellationToken ct = default)
+    {
+        using var res = await _http.PostAsJsonAsync("api/v1/saved-views", body, Json, ct);
+        await ThrowIfProblem(res, ct);
+        return (await res.Content.ReadFromJsonAsync<SavedView>(Json, ct))!;
+    }
+
+    public async Task DeleteSavedViewAsync(string id, CancellationToken ct = default)
+    {
+        using var res = await _http.DeleteAsync($"api/v1/saved-views/{Uri.EscapeDataString(id)}", ct);
+        await ThrowIfProblem(res, ct);
+    }
+
+    // ---- Bulk jobs ------------------------------------------------------
+
+    public async Task<BulkJobAccepted> PostBulkJobAsync(
+        Stream fileStream, string fileName, string contentType,
+        IProgress<(long sent, long? total)>? progress, CancellationToken ct = default)
+    {
+        // MultipartFormDataContent to match `[FromForm] IFormFile file`
+        // on the server (BulkJobEndpoints.AcceptUploadAsync). Progress
+        // reporting on the upload body is best-effort — HttpClient in
+        // Blazor WASM doesn't expose per-byte transmit callbacks the way
+        // XHR does in JS, so we report file-total-then-total when the
+        // POST resolves; a JS-driven upload path exists in the browser
+        // but isn't wired here.
+        using var content = new MultipartFormDataContent();
+        var streamContent = new StreamContent(fileStream);
+        streamContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(contentType);
+        content.Add(streamContent, "file", fileName);
+
+        using var res = await _http.PostAsync("api/v1/bulk-jobs", content, ct);
+        await ThrowIfProblem(res, ct);
+        return (await res.Content.ReadFromJsonAsync<BulkJobAccepted>(Json, ct))!;
+    }
+
+    public async Task<BulkJobStatus> GetBulkJobAsync(string id, CancellationToken ct = default)
+    {
+        using var res = await _http.GetAsync($"api/v1/bulk-jobs/{Uri.EscapeDataString(id)}", ct);
+        await ThrowIfProblem(res, ct);
+        return (await res.Content.ReadFromJsonAsync<BulkJobStatus>(Json, ct))!;
+    }
+
+    // SSE stream of BulkJobStatus snapshots. Yields each parsed frame as
+    // it arrives. Callers `await foreach` and break on completion, or on
+    // the last snapshot's `.Status` reaching a terminal value.
+    public async IAsyncEnumerable<BulkJobStatus> StreamBulkJobEventsAsync(
+        string id, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Get, $"api/v1/bulk-jobs/{Uri.EscapeDataString(id)}/events");
+        req.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("text/event-stream"));
+        using var res = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+        await ThrowIfProblem(res, ct);
+
+        using var stream = await res.Content.ReadAsStreamAsync(ct);
+        using var reader = new StreamReader(stream);
+
+        // Simple SSE parser: frames are separated by blank lines; `data:`
+        // lines within a frame are concatenated. We ignore `event:` name
+        // and `id:` for now — the server sends the same JSON snapshot on
+        // both `message` and the terminal `done` event.
+        var buf = new System.Text.StringBuilder();
+        string? line;
+        while ((line = await reader.ReadLineAsync(ct)) is not null)
+        {
+            if (line.Length == 0)
+            {
+                var data = buf.ToString();
+                buf.Clear();
+                if (data.Length == 0) continue;
+                BulkJobStatus? snap = null;
+                try { snap = JsonSerializer.Deserialize<BulkJobStatus>(data, Json); }
+                catch { /* skip malformed frame */ }
+                if (snap is not null) yield return snap;
+                continue;
+            }
+            if (line.StartsWith("data:", StringComparison.Ordinal))
+            {
+                var payload = line.Length > 5 && line[5] == ' ' ? line[6..] : line[5..];
+                if (buf.Length > 0) buf.Append('\n');
+                buf.Append(payload);
+            }
+            // Silently drop `event:`, `id:`, `retry:` lines — the frame
+            // JSON is self-describing.
+        }
+    }
+
+    // ---- CSV download helpers ------------------------------------------
+
+    public async Task<byte[]> DownloadAsync(string path, CancellationToken ct = default)
+    {
+        using var res = await _http.GetAsync(path, ct);
+        await ThrowIfProblem(res, ct);
+        return await res.Content.ReadAsByteArrayAsync(ct);
+    }
+
     // ---- helpers --------------------------------------------------------
 
     private static void AppendMulti(

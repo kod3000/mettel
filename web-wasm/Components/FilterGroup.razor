@@ -1,0 +1,17 @@
+@* Small label + chip-row helper used by Filters.razor. *@
+
+<fieldset style="display:inline-flex;align-items:center;gap:6px;border:0;padding:0;margin:0">
+    <legend style="font-size:11px;color:var(--slate-500);padding-right:4px;float:none;display:inline">@Label</legend>
+    @foreach (var o in Options)
+    {
+        var on = Selected is not null && Selected.Contains(o);
+        <button type="button" class="chip @(on ? "on" : "")" @onclick="() => OnToggle.InvokeAsync(o)">@o</button>
+    }
+</fieldset>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = default!;
+    [Parameter, EditorRequired] public IEnumerable<string> Options { get; set; } = default!;
+    [Parameter] public IReadOnlyCollection<string>? Selected { get; set; }
+    [Parameter] public EventCallback<string> OnToggle { get; set; }
+}

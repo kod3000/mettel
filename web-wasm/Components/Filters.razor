@@ -1,32 +1,48 @@
-@inject IJSRuntime JS
 @implements IDisposable
 
-@* Search + multi-select chip filters. Debounces the search box at 300ms
-   (matches the design doc figure — same as the React SPA). Chip toggles
-   emit synchronously since they're low-volume. *@
+@* Filter + sort + search bar. Emits a single ValueChanged with the full
+   ListParams so the parent holds one source of truth. Search debounces
+   at 300ms — same figure as the React SPA + design doc. Category and
+   status vocabularies mirror the React `apps/web/src/components/Filters.tsx`
+   and the API seed data. *@
 
 <div class="filters">
     <input
+        type="search"
         class="input search"
-        placeholder="Search service # / product / notes…"
+        placeholder="Search service #, product, address…"
         value="@_q"
         @oninput="OnSearchInput"
         aria-label="Search inventory" />
 
-    <div class="chip-group" role="group" aria-label="Status filter">
-        @foreach (var s in Statuses)
-        {
-            var on = Value.Status is not null && Value.Status.Contains(s);
-            <button type="button" class="chip @(on ? "on" : "")" @onclick="() => ToggleStatus(s)">@s</button>
-        }
-    </div>
+    <FilterGroup Label="Status" Options="Statuses" Selected="Value.Status"
+                 OnToggle="s => ToggleStatus(s)" />
 
-    <div class="chip-group" role="group" aria-label="Category filter">
-        @foreach (var c in Categories)
-        {
-            var on = Value.ProductCategory is not null && Value.ProductCategory.Contains(c);
-            <button type="button" class="chip @(on ? "on" : "")" @onclick="() => ToggleCategory(c)">@c</button>
-        }
+    <FilterGroup Label="Category" Options="Categories" Selected="Value.ProductCategory"
+                 OnToggle="c => ToggleCategory(c)" />
+
+    @if (HasActiveFilters())
+    {
+        <button type="button" class="btn" style="font-size:11px;padding:2px 8px"
+                @onclick="ClearAsync" title="Reset q + status + category + state">
+            Clear filters
+        </button>
+    }
+
+    <div style="display:flex;align-items:center;gap:6px;margin-left:auto;font-size:11px;color:var(--slate-600)">
+        <span>Sort</span>
+        <select class="select" style="height:26px;font-size:11px" value="@(Value.Sort ?? "createdAt")"
+                @onchange="OnSortKey">
+            @foreach (var k in SortKeys)
+            {
+                <option value="@k">@k</option>
+            }
+        </select>
+        <select class="select" style="height:26px;font-size:11px" value="@(Value.Dir ?? "desc")"
+                @onchange="OnSortDir">
+            <option value="desc">desc</option>
+            <option value="asc">asc</option>
+        </select>
     </div>
 </div>
 
@@ -34,20 +50,15 @@
     [Parameter, EditorRequired] public BruinApiClient.ListParams Value { get; set; } = default!;
     [Parameter] public EventCallback<BruinApiClient.ListParams> ValueChanged { get; set; }
 
-    // Fixed set — small and stable. Categories intentionally short; state
-    // filter is deferred to v2 since v1 is a perf comparison, not a full
-    // clone of the SPA's UX chrome.
+    // Vocabularies mirror React's Filters.tsx exactly.
     private static readonly string[] Statuses   = { "pending", "active", "disconnected" };
-    private static readonly string[] Categories = { "Fiber", "DIA", "MPLS", "SD-WAN", "Voice" };
+    private static readonly string[] Categories = { "voice", "data", "wireless", "other" };
+    private static readonly string[] SortKeys   = { "createdAt", "updatedAt", "status", "serviceNumber", "productName" };
 
     private string _q = "";
     private System.Timers.Timer? _debounce;
 
-    protected override void OnParametersSet()
-    {
-        // Keep local `_q` in sync when parent resets Value externally.
-        _q = Value.Q ?? "";
-    }
+    protected override void OnParametersSet() => _q = Value.Q ?? "";
 
     private void OnSearchInput(ChangeEventArgs e)
     {
@@ -61,18 +72,28 @@
 
     private async void FireSearch(object? _, System.Timers.ElapsedEventArgs __)
     {
-        await InvokeAsync(() => Emit(Value with { Q = string.IsNullOrWhiteSpace(_q) ? null : _q.Trim(), Cursor = null }));
+        var trimmed = _q.Trim();
+        if (trimmed == (Value.Q ?? "").Trim()) return;
+        await InvokeAsync(() => Emit(Value with { Q = string.IsNullOrEmpty(trimmed) ? null : trimmed, Cursor = null }));
     }
 
-    private Task ToggleStatus(string s) => Emit(Value with {
-        Status = Toggle(Value.Status, s),
-        Cursor = null,
-    });
+    private Task ToggleStatus(string s) => Emit(Value with { Status = Toggle(Value.Status, s), Cursor = null });
+    private Task ToggleCategory(string c) => Emit(Value with { ProductCategory = Toggle(Value.ProductCategory, c), Cursor = null });
 
-    private Task ToggleCategory(string c) => Emit(Value with {
-        ProductCategory = Toggle(Value.ProductCategory, c),
-        Cursor = null,
-    });
+    private Task OnSortKey(ChangeEventArgs e)   => Emit(Value with { Sort = e.Value?.ToString(), Cursor = null });
+    private Task OnSortDir(ChangeEventArgs e)   => Emit(Value with { Dir  = e.Value?.ToString(), Cursor = null });
+
+    private bool HasActiveFilters() =>
+        !string.IsNullOrWhiteSpace(Value.Q)
+        || (Value.Status?.Count ?? 0) > 0
+        || (Value.ProductCategory?.Count ?? 0) > 0
+        || (Value.State?.Count ?? 0) > 0;
+
+    private Task ClearAsync()
+    {
+        _q = "";
+        return Emit(Value with { Q = null, Status = null, ProductCategory = null, State = null, Cursor = null });
+    }
 
     private static IReadOnlyCollection<string>? Toggle(IReadOnlyCollection<string>? cur, string val)
     {

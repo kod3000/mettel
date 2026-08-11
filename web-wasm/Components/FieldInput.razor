@@ -1,0 +1,17 @@
+@* Label + input wrapper with optional inline error. Used by
+   CreateInventoryModal. *@
+
+<label style="display:flex;flex-direction:column;gap:4px;font-size:11px">
+    <span style="color:var(--slate-700);font-weight:500">@Label</span>
+    @ChildContent
+    @if (!string.IsNullOrEmpty(Error))
+    {
+        <span style="font-size:10px;color:var(--rose-700)">@Error</span>
+    }
+</label>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = default!;
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

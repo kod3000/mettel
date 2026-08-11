@@ -1,0 +1,141 @@
+@inject BruinApiClient Api
+
+@* Simple modal form matching React's CreateInventoryModal. Server 400
+   ProblemDetails.errors map to per-field inline messages; the
+   duplicate-service-number slug is folded onto the serviceNumber
+   field even though the server returns it as a top-level detail. *@
+
+@if (Open)
+{
+    <div class="drawer-backdrop" style="align-items:center;justify-content:center;display:flex" @onclick="OnClose">
+        <form class="drawer" style="position:relative;max-width:420px;height:auto"
+              @onclick:stopPropagation="true" @onsubmit="Submit" @onsubmit:preventDefault="true">
+            <header class="drawer-header">
+                <div style="flex:1">
+                    <div class="title">New inventory</div>
+                    <div style="font-size:11px;color:var(--slate-500);margin-top:2px">
+                        Server errors map to the field they belong to.
+                    </div>
+                </div>
+                <button type="button" class="close-x" @onclick="OnClose" disabled="@_pending" aria-label="Close">✕</button>
+            </header>
+
+            <div class="drawer-body" style="gap:10px">
+                <FieldInput Label="Service number" Error="@Err("serviceNumber")">
+                    <input required autofocus class="input" style="width:100%"
+                           value="@_form.ServiceNumber"
+                           @oninput="e => _form = _form with { ServiceNumber = e.Value?.ToString() }" />
+                </FieldInput>
+
+                <FieldInput Label="Product category" Error="@Err("productCategory")">
+                    <select class="input" style="width:100%"
+                            value="@(_form.ProductCategory ?? "voice")"
+                            @onchange="e => _form = _form with { ProductCategory = e.Value?.ToString() }">
+                        @foreach (var c in Categories)
+                        {
+                            <option value="@c">@c</option>
+                        }
+                    </select>
+                </FieldInput>
+
+                <FieldInput Label="Product name" Error="@Err("productName")">
+                    <input required class="input" style="width:100%"
+                           value="@_form.ProductName"
+                           @oninput="e => _form = _form with { ProductName = e.Value?.ToString() }" />
+                </FieldInput>
+
+                <FieldInput Label="Initial status" Error="@Err("status")">
+                    <select class="input" style="width:100%"
+                            value="@(_form.Status ?? "pending")"
+                            @onchange="e => _form = _form with { Status = e.Value?.ToString() }">
+                        @foreach (var s in InitialStatuses)
+                        {
+                            <option value="@s">@s</option>
+                        }
+                    </select>
+                </FieldInput>
+
+                @if (_topLevelErr is not null)
+                {
+                    <div class="err-box" style="font-size:11px;padding:6px 8px">@_topLevelErr</div>
+                }
+
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+                    <button type="button" class="btn" @onclick="OnClose" disabled="@_pending">Cancel</button>
+                    <button type="submit" class="btn primary" disabled="@_pending">
+                        @(_pending ? "Creating…" : "Create")
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback OnClosed { get; set; }
+    [Parameter] public EventCallback<InventoryRow> OnCreated { get; set; }
+
+    private static readonly string[] Categories       = { "voice", "data", "wireless", "other" };
+    private static readonly string[] InitialStatuses  = { "pending", "active" };
+
+    private CreateRequest _form = new(
+        ServiceNumber: "", ProductCategory: "voice", ProductName: "", Status: "pending");
+    private Dictionary<string, string[]> _errors = new();
+    private string? _topLevelErr;
+    private bool _pending;
+
+    protected override void OnParametersSet()
+    {
+        if (Open)
+        {
+            _form = new(ServiceNumber: "", ProductCategory: "voice", ProductName: "", Status: "pending");
+            _errors = new();
+            _topLevelErr = null;
+            _pending = false;
+        }
+    }
+
+    private string? Err(string key) => _errors.TryGetValue(key, out var v) && v.Length > 0 ? v[0] : null;
+
+    private async Task Submit()
+    {
+        if (_pending) return;
+        _pending = true;
+        _errors = new();
+        _topLevelErr = null;
+        StateHasChanged();
+
+        try
+        {
+            var row = await Api.CreateAsync(_form);
+            await OnCreated.InvokeAsync(row);
+            await OnClose();
+        }
+        catch (ApiException ex)
+        {
+            _errors = ex.Problem.Errors is null
+                ? new()
+                : new Dictionary<string, string[]>(ex.Problem.Errors,
+                    StringComparer.OrdinalIgnoreCase);
+            // The duplicate-service-number slug arrives as a top-level
+            // detail, not an entry in errors. Fold it onto the field the
+            // user actually sees.
+            if (ex.IsSlug("duplicate-service-number") && !_errors.ContainsKey("serviceNumber"))
+            {
+                _errors["serviceNumber"] = new[] { ex.Problem.Detail ?? ex.Problem.Title ?? "Duplicate service number" };
+            }
+            if (_errors.Count == 0)
+            {
+                _topLevelErr = ex.Problem.Title ?? ex.Problem.Detail ?? "Something went wrong.";
+            }
+        }
+        finally
+        {
+            _pending = false;
+            StateHasChanged();
+        }
+    }
+
+    private Task OnClose() => OnClosed.InvokeAsync();
+}

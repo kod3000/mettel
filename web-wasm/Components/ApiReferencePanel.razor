@@ -1,0 +1,207 @@
+@inject TenantContext Tenant
+@inject IJSRuntime JS
+@implements IDisposable
+
+@* In-app API cheat-sheet. Mirrors React's ApiReferencePanel.tsx —
+   endpoint list, filter reference, copy-to-clipboard snippets with the
+   current tenant's key pre-substituted. Non-consequential; the demo
+   keys are already visible in the picker. *@
+
+<div class="drawer-backdrop" @onclick="OnCloseClick">
+    <aside class="drawer" style="max-width:560px" @onclick:stopPropagation="true" role="dialog" aria-label="API reference">
+        <header class="drawer-header">
+            <div style="flex:1;min-width:0">
+                <div class="eyebrow">Direct API access</div>
+                <div class="title">@Tenant.Current.Label</div>
+            </div>
+            <a href="/openapi/v1.json" target="_blank" rel="noopener noreferrer"
+               style="color:var(--indigo-600);font-size:11px;text-decoration:none">OpenAPI JSON →</a>
+            <button type="button" class="close-x" @onclick="OnCloseClick" aria-label="Close">✕</button>
+        </header>
+
+        <div class="drawer-body">
+            <section>
+                <div class="eyebrow" style="margin-bottom:4px">Your API key</div>
+                <div style="display:flex;align-items:stretch;gap:6px">
+                    <code class="apikey">@(_revealed ? Tenant.Current.ApiKey : Mask(Tenant.Current.ApiKey))</code>
+                    <button type="button" class="btn" style="font-size:11px;padding:2px 8px"
+                            @onclick="() => _revealed = !_revealed">
+                        @(_revealed ? "Hide" : "Reveal")
+                    </button>
+                    <button type="button" class="btn" style="font-size:11px;padding:2px 8px"
+                            @onclick="CopyKey">
+                        @(_copiedTag == "key" ? "Copied ✓" : "Copy")
+                    </button>
+                </div>
+                <p style="font-size:10px;color:var(--slate-500);margin-top:4px">
+                    Send as <code>X-Api-Key</code> on every request. Demo keys — no rate limiting, no real auth.
+                </p>
+            </section>
+
+            <section>
+                <div class="eyebrow" style="margin-bottom:4px">Base URL</div>
+                <code class="codeblock">@Base</code>
+                <p style="font-size:10px;color:var(--slate-500);margin-top:4px">
+                    Also reachable at <code>/use/v1/api/*</code> — a stable public alias with the same routes.
+                </p>
+            </section>
+
+            <section>
+                <div class="eyebrow" style="margin-bottom:6px">Endpoints</div>
+                <div style="display:flex;flex-direction:column;gap:10px">
+                    @foreach (var ep in Endpoints)
+                    {
+                        var snippet = ep.Example(Base, Tenant.Current.ApiKey);
+                        <div class="endpoint">
+                            <div class="endpoint-head">
+                                <span class="method @ep.Method.ToLowerInvariant()">@ep.Method</span>
+                                <code style="font-size:11px;color:var(--slate-800)">@ep.Path</code>
+                                <span style="flex:1"></span>
+                                <button type="button" class="btn" style="font-size:11px;padding:2px 8px"
+                                        @onclick="() => CopyAsync(snippet, ep.Path + ep.Method)">
+                                    @(_copiedTag == ep.Path + ep.Method ? "Copied ✓" : "Copy")
+                                </button>
+                            </div>
+                            <div class="endpoint-body">
+                                <div style="font-size:12px;font-weight:500">@ep.Title</div>
+                                <div style="font-size:11px;color:var(--slate-600);margin-top:2px">@ep.Description</div>
+                                <pre class="snippet">@snippet</pre>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </section>
+
+            <section>
+                <div class="eyebrow" style="margin-bottom:6px">List filter parameters</div>
+                <table class="filter-table">
+                    <tbody>
+                        @foreach (var (name, desc) in Filters)
+                        {
+                            <tr><td><code style="color:var(--indigo-700)">@name</code></td><td>@desc</td></tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+
+            <section>
+                <div class="eyebrow" style="margin-bottom:4px">Errors</div>
+                <p style="font-size:11px;color:var(--slate-700);line-height:1.5">
+                    All errors return RFC 7807 <code>application/problem+json</code>.
+                    Switch on the last segment of <code>type</code> — stable slugs include
+                    <code>validation-failed</code>, <code>invalid-status-transition</code>,
+                    <code>concurrency-conflict</code>, <code>duplicate-service-number</code>,
+                    <code>not-found</code>, <code>payload-too-large</code>.
+                </p>
+            </section>
+        </div>
+    </aside>
+</div>
+
+<style>
+    .apikey, .codeblock {
+        flex: 1; font-family: ui-monospace, monospace; font-size: 11px;
+        background: var(--slate-50); border: 1px solid var(--slate-200);
+        border-radius: 4px; padding: 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        user-select: all;
+    }
+    .codeblock { display: block; flex: initial; }
+    .endpoint { border: 1px solid var(--slate-200); border-radius: 6px; overflow: hidden; background: white; }
+    .endpoint-head {
+        display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+        background: var(--slate-50); border-bottom: 1px solid var(--slate-200);
+    }
+    .endpoint-body { padding: 8px 10px; }
+    .method {
+        font-family: ui-monospace, monospace; font-size: 10px; font-weight: 600;
+        padding: 1px 6px; border-radius: 3px;
+    }
+    .method.get   { background: var(--emerald-100); color: var(--emerald-800); }
+    .method.post  { background: #e0e7ff; color: #3730a3; }
+    .method.patch { background: #fef3c7; color: var(--amber-800); }
+    .snippet {
+        margin: 6px 0 0 0; padding: 8px 10px; background: #0f172a; color: #e2e8f0;
+        font-family: ui-monospace, monospace; font-size: 10.5px; line-height: 1.5;
+        border-radius: 4px; overflow-x: auto; white-space: pre;
+    }
+    .filter-table { width: 100%; font-size: 11px; border-collapse: collapse; }
+    .filter-table td { padding: 4px 6px; vertical-align: top; border-bottom: 1px solid var(--slate-100); }
+    .filter-table td:first-child { width: 130px; }
+</style>
+
+@code {
+    [Parameter] public EventCallback OnClosed { get; set; }
+
+    private bool _revealed;
+    private string? _copiedTag;
+    private System.Threading.Timer? _copyResetTimer;
+    private string _origin = "";
+
+    // Populated on first render — the origin isn't available until JS is up.
+    private string Base => string.IsNullOrEmpty(_origin) ? "https://mettel.exercise.dany.codes" : _origin;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try { _origin = await JS.InvokeAsync<string>("eval", "window.location.origin"); }
+        catch { _origin = ""; }
+    }
+
+    private Task OnCloseClick() => OnClosed.InvokeAsync();
+
+    private Task CopyKey() => CopyAsync(Tenant.Current.ApiKey, "key");
+
+    private async Task CopyAsync(string text, string tag)
+    {
+        var ok = await JS.InvokeAsync<bool>("bruinClipboard.write", text);
+        if (!ok) return;
+        _copiedTag = tag;
+        StateHasChanged();
+        _copyResetTimer?.Dispose();
+        _copyResetTimer = new System.Threading.Timer(_ =>
+        {
+            _copiedTag = null;
+            InvokeAsync(StateHasChanged);
+        }, null, 1400, System.Threading.Timeout.Infinite);
+    }
+
+    private static string Mask(string k)
+    {
+        if (k.Length <= 12) return new string('•', k.Length);
+        return k[..6] + new string('•', 20) + k[^4..];
+    }
+
+    private sealed record Endpoint(string Method, string Path, string Title, string Description, Func<string, string, string> Example);
+
+    private static readonly Endpoint[] Endpoints =
+    {
+        new("GET", "/api/v1/inventory", "List inventory",
+            "Keyset-paginated list. Filters combine with AND. Repeat `status`, `productCategory`, `state` for multi-value filters.",
+            (b, k) => $"curl \"{b}/api/v1/inventory?q=fib&status=active&pageSize=100&sort=updatedAt&dir=desc\" \\\n  -H \"X-Api-Key: {k}\""),
+        new("GET", "/api/v1/inventory/{id}", "Get single row",
+            "Reads through the primary — no replica lag on the row you just wrote.",
+            (b, k) => $"curl \"{b}/api/v1/inventory/<uuid>\" \\\n  -H \"X-Api-Key: {k}\""),
+        new("POST", "/api/v1/inventory", "Create row",
+            "Response includes `X-Write-LSN` — echo as `X-Min-LSN` on subsequent reads for read-your-own-writes.",
+            (b, k) => $"curl -X POST \"{b}/api/v1/inventory\" \\\n  -H \"X-Api-Key: {k}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{{\n    \"serviceNumber\": \"SVC-000001\",\n    \"productCategory\": \"voice\",\n    \"productName\": \"Business Voice Line\",\n    \"status\": \"pending\"\n  }}'"),
+        new("PATCH", "/api/v1/inventory/{id}/status", "Change status",
+            "Transitions: pending → active, pending → disconnected, active → disconnected. `rowVersion` from GET is required (optimistic concurrency).",
+            (b, k) => $"curl -X PATCH \"{b}/api/v1/inventory/<uuid>/status\" \\\n  -H \"X-Api-Key: {k}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{{\"status\": \"active\", \"rowVersion\": 1}}'"),
+        new("POST", "/api/v1/bulk-jobs", "Bulk upload (CSV)",
+            "Streams a CSV up to 200MB. Response returns a job id; poll `GET /api/v1/bulk-jobs/{id}` or subscribe to `/events` (SSE) for progress.",
+            (b, k) => $"curl -X POST \"{b}/api/v1/bulk-jobs\" \\\n  -H \"X-Api-Key: {k}\" \\\n  -H \"Content-Type: text/csv\" \\\n  --data-binary @inventory.csv"),
+    };
+
+    private static readonly (string Name, string Desc)[] Filters =
+    {
+        ("q",               "Prefix search on service # / product name (e.g. `q=fib` matches Fiber, not Amplifier)."),
+        ("status",          "Repeat for OR — `?status=pending&status=active`. Allowed: pending, active, disconnected."),
+        ("productCategory", "Repeat for OR. Allowed: voice, data, wireless, other."),
+        ("state",           "US state code, e.g. `state=NY`. Repeatable."),
+        ("sort",            "createdAt (default), updatedAt, status, serviceNumber, productName."),
+        ("dir",             "asc | desc (default desc)."),
+        ("pageSize",        "1–500, default 100."),
+        ("cursor",          "Opaque, signed. From `nextCursor` of a prior response. Do not construct by hand."),
+    };
+
+    public void Dispose() => _copyResetTimer?.Dispose();
+}

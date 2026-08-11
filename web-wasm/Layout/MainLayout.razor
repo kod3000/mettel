@@ -1,27 +1,51 @@
 @inherits LayoutComponentBase
 @inject TenantContext Tenant
+@inject IJSRuntime JS
 @implements IDisposable
 
-@* Global shell — top bar with title + client picker. Rerenders on tenant
-   change so the picker label stays in sync, and the child page (Home)
-   also re-keys its data view on tenant change to purge caches. *@
+@* Global shell — top bar with title, client picker, API button, "+ New".
+   The + New / API buttons are wired via cascading state so Home can
+   render the actual modals inside its keyed subtree (so a tenant flip
+   still tears them down). *@
 
-<div class="app-shell">
-    <header class="topbar">
-        <div>
-            <h1>Bruin Inventory Grid</h1>
-            <div class="subtitle">MetTel Bruin Platform — Blazor WebAssembly twin</div>
-        </div>
-        <div class="spacer"></div>
-        <ClientPicker />
-    </header>
-    @Body
-</div>
+<CascadingValue Value="_appActions" IsFixed="true">
+    <div class="app-shell">
+        <header class="topbar">
+            <div>
+                <h1>Bruin Inventory Grid</h1>
+                <div class="subtitle">MetTel Bruin Platform — Blazor WebAssembly twin</div>
+            </div>
+            <div class="spacer"></div>
+            <ClientPicker />
+            <button type="button" class="btn" @onclick="OpenApiRef">API</button>
+            <button type="button" class="btn primary" @onclick="OpenCreate">+ New</button>
+        </header>
+        @Body
+    </div>
+</CascadingValue>
 
 @code {
-    protected override void OnInitialized() => Tenant.OnChanged += HandleTenantChanged;
+    private readonly AppActions _appActions = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Tenant.OnChanged += HandleTenantChanged;
+        try { await JS.InvokeVoidAsync("bruinBeforeUnload.enable"); }
+        catch { /* prerender fallback */ }
+    }
 
     private void HandleTenantChanged() => InvokeAsync(StateHasChanged);
 
-    public void Dispose() => Tenant.OnChanged -= HandleTenantChanged;
+    private void OpenCreate()  => _appActions.RaiseOpenCreate();
+    private void OpenApiRef()  => _appActions.RaiseOpenApiRef();
+
+    public void Dispose()
+    {
+        Tenant.OnChanged -= HandleTenantChanged;
+        _ = JS.InvokeVoidAsync("bruinBeforeUnload.disable");
+    }
 }
+
+@* Not a real Razor code-behind pattern — we just need a small typed
+   "event bus" the top bar can push to and the Home page can subscribe
+   to. Simpler than an IServiceCollection registration for two buttons. *@
