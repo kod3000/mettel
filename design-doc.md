@@ -24,10 +24,14 @@ boundary is a value, not a position.
 generic plan chose created_at scans touching 3.5M rows on no-match terms (127s).
 `reltuples` cached 30s; cap-count skipped when the page fits.
 
-Bench (`make bench`, 12 CPU / 20GB Colima VM): cold list p95 22ms. Search p95
-**[__]ms @1 VU, [__]ms @10 VU**, 1.5s @100 VU; filtered 1.8s @100 VU. Plans are
-correct at the DB layer — the VM saturates 12 vCPU well before a real 16-core
-Postgres would. Plans and trajectory in `bench/results.md`.
+Bench (`bench/live.js` via k6 against https://mettel.exercise.dany.codes over the
+public internet — single Mac hosting api + pg-primary + pg-replica + worker + nginx):
+cold list p95 **107ms @1 VU, 105ms @10 VU, 308ms @100 VU** (target ≤500ms met across
+the sweep). Search p95 **182ms @1 VU, 365ms @10 VU**, 3.3s @100 VU; filtered p95
+265ms @1 VU, 476ms @10 VU, 6.6s @100 VU. Plans are correct at the DB layer — the
+shared host saturates well before dedicated Postgres would, and the @100 VU
+regression on filtered/search is queue amplification on a laptop, not a code
+defect. Full VU sweep + methodology in `bench/results.md`.
 
 **Protecting the primary writer.** Two Npgsql pools, `IReadRouter` scoped per
 request. Empty `X-Min-LSN` → replica; present → cached `pg_last_wal_replay_lsn()`
@@ -40,8 +44,10 @@ keyset tiebreakers. `search_tsv` GENERATED ALWAYS … STORED over
 product_name/address/notes. Enums are text + CHECK, not PG enum types (altering
 those in migrations is painful). `timestamptz` throughout; trigger owns `updated_at`
 + `row_version`. Status transitions (pending→active→disconnected, plus documented
-pending→disconnected) are enforced in **[__]** and rejected as ProblemDetails,
-never a silent no-op.
+pending→disconnected) are enforced in **`Domain/StatusTransitions.cs`** — the one
+table shared by the single-row `WriteHandler` and the bulk `BulkJobRunner`, so
+operator and import see the same law — and rejected as ProblemDetails, never a
+silent no-op.
 
 **Bulk jobs.** POST persists the file, inserts `bulk_job`, returns 202 in <100ms —
 no parsing in the handler. Worker (BackgroundService, same image, `--worker`) claims
