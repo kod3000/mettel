@@ -130,15 +130,26 @@ html, body {
 }
 .count-line .filtered { color: var(--slate-800); font-weight: 600; }
 
-/* Grid */
-.grid-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: white; }
+/* Grid — full-width layout. Product column is the flexible one (1fr);
+   everything else is a fixed pixel width sized to its content. The
+   `minmax(180px, 1fr)` on Product keeps a readable minimum at small
+   widths and lets it absorb extra space on wide screens. */
+.grid-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: white; width: 100%; }
 .grid-header, .grid-row {
     display: grid;
-    grid-template-columns: 140px 220px 130px 110px 170px 170px;
+    grid-template-columns:
+        minmax(140px, 180px)         /* Service # */
+        minmax(180px, 1fr)           /* Product (flex) */
+        minmax(120px, 140px)         /* Status */
+        minmax(110px, 140px)         /* Category */
+        minmax(150px, 180px)         /* Created */
+        minmax(150px, 180px);        /* Updated */
     align-items: center;
-    padding: 0 12px;
-    column-gap: 12px;
-    min-width: 940px;
+    padding: 0 16px;
+    column-gap: 16px;
+    min-width: 900px;
+    width: 100%;
+    box-sizing: border-box;
 }
 .grid-header {
     position: sticky; top: 0; z-index: 2;
@@ -149,7 +160,7 @@ html, body {
 }
 .grid-header .col { cursor: pointer; }
 .grid-header .col.sorted { color: var(--slate-800); }
-.grid-scroll { overflow: auto; flex: 1; }
+.grid-scroll { overflow: auto; flex: 1; width: 100%; }
 .grid-row {
     height: 32px; border-bottom: 1px solid var(--slate-100);
     color: var(--slate-800); font-size: 13px;
