@@ -26,12 +26,17 @@ generic plan chose created_at scans touching 3.5M rows on no-match terms (127s).
 
 Bench (`bench/live.js` via k6 against https://mettel.exercise.dany.codes over the
 public internet — single Mac hosting api + pg-primary + pg-replica + worker + nginx):
-cold list p95 **107ms @1 VU, 105ms @10 VU, 308ms @100 VU** (target ≤500ms met across
-the sweep). Search p95 **182ms @1 VU, 365ms @10 VU**, 3.3s @100 VU; filtered p95
-265ms @1 VU, 476ms @10 VU, 6.6s @100 VU. Plans are correct at the DB layer — the
-shared host saturates well before dedicated Postgres would, and the @100 VU
-regression on filtered/search is queue amplification on a laptop, not a code
-defect. Full VU sweep + methodology in `bench/results.md`.
+cold list p95 **105ms @1 VU, 114ms @10 VU, 238ms @100 VU** (target ≤500ms met across
+the sweep). Search p95 **229ms @1 VU, 411ms @10 VU**, 3.7s @100 VU; filtered p95
+290ms @1 VU, 494ms @10 VU, 6.8s @100 VU. Plans are correct at the DB layer —
+uncontended `EXPLAIN (ANALYZE, BUFFERS)` runs ~400ms per query, and the @100 VU
+regression on filtered/search is queue amplification on a shared laptop
+(p95/p50 ≈ 7×). Whether dedicated Postgres actually clears 500ms at 100 VU is
+untested — 100ms of headroom over uncontended plan time is thin margin, and
+`bench/results.md` is honest about that. Per-tenant @100 VU (acme 3.5M / beacon
+1.8M / cascade 724K) is within run-to-run noise across the 5× row-count spread
+— the composite index seeks directly to the page regardless of tenant size.
+Full VU sweep + methodology in `bench/results.md`.
 
 **Protecting the primary writer.** Two Npgsql pools, `IReadRouter` scoped per
 request. Empty `X-Min-LSN` → replica; present → cached `pg_last_wal_replay_lsn()`
@@ -96,17 +101,24 @@ language mix, whether load bursts 09:00–17:00 and drops after 18:00 relative t
 zone. That drives index choice, cache TTLs, and bulk scheduling far better than a
 synthetic bench does.
 
-**What I'd revisit.** (1) Real hardware for the bench. (2) Full-substring search via
-an inverted index over a normalised column, or an external engine. (3)
+**What I'd revisit.** (1) Real hardware for the bench — needed to actually test
+whether removing the laptop bottleneck clears the 500ms gate at 100 VU, not just
+assume it. (2) Configuration sensitivity study with N≥5 runs per point: the
+`bench/results.md` sensitivity table shows filtered p95 non-monotonic across
+tuning steps (best ever measured was 8CPU/16GB shared_buffers 384MB at 726ms,
+shipped config is 2.5× worse), and single 45s runs at 100 VU can't distinguish
+signal from noise. Either the shipped 12CPU/20GB tuning is actively wrong or
+the runs are too short; both are testable. (3) Full-substring search via an
+inverted index over a normalised column, or an external engine. (4)
 `saved_view.columns` UI — endpoint and persistence shipped, show/hide widget cut.
-(4) Optimistic create — chose refetch-with-LSN above, which makes the router
-visibly correct instead of dressing up latency. (5) Render path, once saved views
+(5) Optimistic create — chose refetch-with-LSN above, which makes the router
+visibly correct instead of dressing up latency. (6) Render path, once saved views
 let operators pull multi-thousand-row sets into the DOM: row virtualization first,
 and a WebAssembly render layer only if profiling shows the bottleneck is paint
 rather than fetch. At 100 rows a page it isn't, so that stays a hypothesis rather
 than a plan.
 
-**Hours.** ~**12hrs** end-to-end. The tooling below compressed the build; most of
+**Hours.** ~**15hrs** end-to-end. The tooling below compressed the build; most of
 that time went to reading its output and chasing the two defects it hid.
 
 **AI tooling.** Claude Code and Kimi generated most backend and frontend

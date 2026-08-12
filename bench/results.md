@@ -112,9 +112,13 @@ _22 808 requests, 7 failed (0.03 %)._
 - Search: **PASS** at 1 & 10 VU (Acme). **FAIL** at 100 VU on the shared
   laptop (all three tenants: 3.7 s / 4.5 s / 3.4 s).
 
-Both filtered and search hit the gate on dedicated hardware — the plans
-are correct and the same code is what runs. The laptop test bed
-saturates CPU on the write-heavy paths first (see next section).
+The plans themselves are not the bottleneck: uncontended
+`EXPLAIN (ANALYZE, BUFFERS)` runs the graded filtered + search queries
+in ~400 ms per query against the same ~6 M-row dataset. Whether a
+dedicated Postgres box actually clears the 500 ms p95 gate at 100 VU
+is untested — 100 ms of headroom above uncontended plan time is thin
+margin for queue amplification, and we have no measurement from real
+hardware to back the claim up.
 
 ## Why 100 VU regresses on live
 
@@ -133,28 +137,52 @@ filtered at 100 VU says the same thing.
   costs more, and the extra work per request eats CPU faster than cold.
 - Search (GIN tsvector + trigram) is the most CPU-heavy path per request.
 
-Under a dedicated 16-core Postgres box (bare metal or a real cloud VM),
-the same code hits the gate — the query plans and index structure are
-unchanged; only the contention window shrinks. This is the constraint
-called out in `design-doc.md`: the plans are correct at the DB layer,
-and the box saturates before dedicated hardware would.
+What we know: the code, plans, and indexes are the same across
+scenarios; the shared laptop is demonstrably CPU-saturated at 100 VU
+(p95/p50 ≈ 7× is textbook queue amplification, not a plan defect).
+What we don't know: whether removing that specific bottleneck on a
+dedicated Postgres box is *sufficient* to clear the 500 ms gate at
+100 VU, or whether further work (materialized read model, external
+search index) is required. Uncontended plan time already sits at ~400
+ms; queue amplification under real concurrency has to fit in ~100 ms
+of remaining budget, which we haven't measured.
 
-## Optimization trajectory
+## Configuration sensitivity (not a monotonic trajectory)
 
-Historical trajectory preserved from the prior local-Colima bench for
-context (VU sweep against localhost, 12 CPU / 20 GB Colima VM). Numbers
-are p95 at 100 VU × 45 s, same ~6 M-row dataset. Subsequent live-network
-overhead is additive.
+Seven point-measurements from tuning attempts against localhost, single
+45 s runs at 100 VU × ~6 M-row dataset. Presenting these as a
+"trajectory" would overstate the story — the numbers do not move
+monotonically:
 
 | Change | Filtered p95 | Search p95 |
 |---|---:|---:|
 | Baseline (Colima 2 CPU / 2 GB, 256 MB shared_buffers) | 5 206 ms | 6 213 ms |
-| Colima 8 CPU / 16 GB, PG shared_buffers 384 MB | 726 ms | 2 125 ms |
-| Colima 12 CPU / 20 GB, PG 4 GB / 12 GB tuning | 2 838 ms | 1 981 ms |
+| Colima **8 CPU / 16 GB**, PG shared_buffers 384 MB | **726 ms** | 2 125 ms |
+| Colima 12 CPU / 20 GB, PG 4 GB / 12 GB tuning | 2 838 ms | **1 981 ms** |
 | + `to_tsquery('q:*')` prefix search + custom-plan enforcement | 2 633 ms | 3 272 ms |
-| + Npgsql pool 200, PG `max_connections=300`, reltuples cache | 4 805 ms | 3 212 ms |
+| + Npgsql pool 200, PG `max_connections=300`, tenant-scoped estimator | 4 805 ms | 3 212 ms |
 | + Skip capped-count when result fits one page | 2 229 ms | 1 493 ms |
-| + PG `max_parallel_workers_per_gather=0` (avoid 100 × N over-schedule) | **1 827 ms** | **1 499 ms** |
+| + PG `max_parallel_workers_per_gather=0` (shipped config) | 1 827 ms | 1 499 ms |
+
+Best filtered p95 ever measured was **row 2 (726 ms** at 8 CPU / 16 GB,
+384 MB shared_buffers). The shipped config is **2.5× worse** than that.
+Search regresses at the prefix-search step (1 981 → 3 272 ms) before
+recovering. Two live hypotheses, neither disproved:
+
+1. **The 12 CPU / 20 GB Colima + 4 GB / 12 GB PG tuning is actively
+   wrong for this workload.** Would need to re-run row 2's config with
+   every subsequent code change applied to test.
+2. **Single 45 s runs at 100 VU are too noisy to distinguish these.**
+   filtered p95 varying 726 → 4 805 across "improvements" while search
+   drifts 1 499–3 272 suggests substantial run-to-run variance. Would
+   need N ≥ 5 runs per config, reported as median + IQR, before drawing
+   ordering conclusions.
+
+The shipped p95 (1 827 ms filtered / 1 499 ms search on Colima
+localhost) is the last run against the shipped config — it may or may
+not be the best attainable with this code. Reproducing takes ~10 min
+per config; the sensitivity study is called out under "What I'd
+revisit" in `design-doc.md`.
 
 ## Reproducing
 
