@@ -1,6 +1,7 @@
 @inject BruinApiClient Api
 @inject TenantContext Tenant
 @inject IJSRuntime JS
+@inject ToastService Toasts
 @implements IDisposable
 
 @* Bulk CSV upload with live progress. Matches the React SPA:
@@ -161,8 +162,21 @@
             await StreamAsync(accepted.JobId, ct);
         }
         catch (OperationCanceledException) { _phase = Phase.Idle; }
-        catch (ApiException ex) { _error = ex.Problem.Detail ?? ex.Problem.Title ?? "upload failed"; _phase = Phase.Error; }
-        catch (Exception ex)    { _error = ex.Message; _phase = Phase.Error; }
+        catch (ApiException ex)
+        {
+            // Pre-accept failures render nothing in the panel (the inline
+            // progress row only mounts when `_job` is set), so surface the
+            // server's ProblemDetails through the toaster instead.
+            _error = ex.Problem.Detail ?? ex.Problem.Title ?? "upload failed";
+            _phase = Phase.Error;
+            Toasts.Error($"Upload failed — {_error}");
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _phase = Phase.Error;
+            Toasts.Error($"Upload failed — {_error}");
+        }
         finally { StateHasChanged(); }
     }
 

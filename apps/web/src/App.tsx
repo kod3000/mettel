@@ -17,6 +17,7 @@ import { BulkUploadPanel } from "./components/BulkUploadPanel.js";
 import { ClientPicker } from "./components/ClientPicker.js";
 import { RowDetailDrawer } from "./components/RowDetailDrawer.js";
 import { ApiReferencePanel } from "./components/ApiReferencePanel.js";
+import { Toaster } from "./components/Toaster.js";
 import { loadTenant, saveTenant, type Tenant } from "./tenants.js";
 import type { InventoryRow, ListParams } from "./api/inventory.js";
 
@@ -159,6 +160,7 @@ function AppShell({ tenant, onTenantChange }: { tenant: Tenant; onTenantChange: 
                             onClose={() => setApiRefOpen(false)}
                         />
                     )}
+                    <Toaster />
                 </div>
             </QueryClientProvider>
         </ApiContext.Provider>

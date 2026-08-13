@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
+import { toast } from "./Toaster.js";
 
 interface JobSnapshot {
     jobId: string;
@@ -95,8 +96,13 @@ export function BulkUploadPanel({ apiKey }: Props) {
             await streamProgress(body.jobId, initial);
         } catch (e: unknown) {
             setUploadProgress(null);
-            setError((e as Error).message ?? "upload failed");
+            const msg = (e as Error).message ?? "upload failed";
+            setError(msg);
             setPhase("error");
+            // Pre-accept failures render nothing in the panel (the inline
+            // <ProgressBar> only mounts when `job` is set), so surface the
+            // server's ProblemDetails through the toaster instead.
+            toast.error(`Upload failed — ${msg}`);
         }
     }
 
@@ -262,7 +268,7 @@ function postWithProgress(
                 try { resolve(JSON.parse(xhr.responseText)); }
                 catch { reject(new Error("invalid response JSON")); }
             } else {
-                reject(new Error(xhr.responseText || `HTTP ${xhr.status}`));
+                reject(new Error(problemMessage(xhr.responseText, xhr.status)));
             }
         };
         xhr.onerror = () => reject(new Error("network error during upload"));
@@ -387,6 +393,21 @@ function formatDuration(sec: number): string {
     const h = Math.floor(sec / 3600);
     const m = Math.round((sec % 3600) / 60);
     return `${h}h ${m}m`;
+}
+
+// The API's 4xx responses are RFC 7807 ProblemDetails JSON — parse and
+// pull out the human-facing text. Falls back to the raw body / HTTP code
+// so we never silently swallow a message we don't understand.
+function problemMessage(body: string, status: number): string {
+    if (body) {
+        try {
+            const p = JSON.parse(body) as { detail?: string; title?: string };
+            const text = p.detail ?? p.title;
+            if (text) return text;
+        } catch { /* not JSON — fall through */ }
+        return body;
+    }
+    return `HTTP ${status}`;
 }
 
 async function downloadCsv(apiKey: string, path: string, filename: string) {
