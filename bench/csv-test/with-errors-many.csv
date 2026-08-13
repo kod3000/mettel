@@ -1,0 +1,8 @@
+serviceNumber,productCategory,productName,status,city,state,address,assignee,notes
+888-ROW-0001,voice,Row Errors 1,pending,NYC,NY,,,
+888-ROW-0002,not-a-category,Row Errors 2,pending,,,,,
+888-ROW-0003,,Row Errors 3,pending,,,,,
+888-ROW-0002,voice,Row Errors dup1,pending,,,,,
+888-ROW-9999,voice,Row Errors 5,disconnected,,,,,
+888-ROW-0006,voice,Row Errors 6 blank sn,pending,,,,,
+,voice,Row Errors 7 empty sn,pending,,,,,

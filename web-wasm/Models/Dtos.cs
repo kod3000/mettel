@@ -103,3 +103,12 @@ public sealed record BulkJobStatus(
     [property: JsonPropertyName("startedAt")]      DateTimeOffset? StartedAt = null,
     [property: JsonPropertyName("completedAt")]    DateTimeOffset? CompletedAt = null,
     [property: JsonPropertyName("errorSampleUrl")] string? ErrorSampleUrl = null);
+
+public sealed record BulkJobErrorEntry(
+    [property: JsonPropertyName("rowNumber")]     int RowNumber,
+    [property: JsonPropertyName("serviceNumber")] string? ServiceNumber,
+    [property: JsonPropertyName("reason")]        string Reason,
+    [property: JsonPropertyName("rawLine")]       string? RawLine);
+
+public sealed record BulkJobErrorsResponse(
+    [property: JsonPropertyName("errors")] IReadOnlyList<BulkJobErrorEntry> Errors);

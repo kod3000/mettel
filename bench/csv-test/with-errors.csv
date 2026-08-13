@@ -1,0 +1,5 @@
+serviceNumber,productCategory,productName,status,city,state,address,assignee,notes
+999-TEST-9001,voice,Toaster Test 1,pending,New York,NY,,,
+999-TEST-9002,not-a-category,Toaster Test 2,pending,Boston,MA,,,
+999-TEST-9003,,Toaster Test 3,pending,,,,,
+999-TEST-9001,voice,Toaster Test dup,pending,New York,NY,,,

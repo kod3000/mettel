@@ -137,6 +137,7 @@ export function BulkUploadPanel({ apiKey }: Props) {
                         if (evName === "done") {
                             setPhase("done");
                             qc.invalidateQueries({ queryKey: ["inventory", "list"] });
+                            await maybeToastJobLevelFailure(snap, apiKey);
                             return;
                         }
                     } catch { /* ignore malformed frame */ }
@@ -163,6 +164,7 @@ export function BulkUploadPanel({ apiKey }: Props) {
                     if (snap.status === "completed" || snap.status === "completedWithErrors" || snap.status === "failed") {
                         setPhase("done");
                         qc.invalidateQueries({ queryKey: ["inventory", "list"] });
+                        await maybeToastJobLevelFailure(snap, apiKey);
                         return;
                     }
                 }
@@ -207,7 +209,7 @@ export function BulkUploadPanel({ apiKey }: Props) {
                 Sample 500k CSV
             </a>
             {uploadProgress && !job && <UploadProgressBar up={uploadProgress} />}
-            {job && rate && <ProgressBar job={job} rate={rate} phase={phase} error={error} />}
+            {job && rate && <ProgressBar job={job} rate={rate} phase={phase} error={error} apiKey={apiKey} />}
         </div>
     );
 }
@@ -282,8 +284,8 @@ function postWithProgress(
     });
 }
 
-function ProgressBar({ job, rate, phase, error }: {
-    job: JobSnapshot; rate: RateWindow; phase: string; error: string | null;
+function ProgressBar({ job, rate, phase, error, apiKey }: {
+    job: JobSnapshot; rate: RateWindow; phase: string; error: string | null; apiKey: string;
 }) {
     const total = Math.max(job.totalRows, job.processedRows, 1);
     const pct = Math.min(100, Math.round((job.processedRows / total) * 100));
@@ -303,10 +305,15 @@ function ProgressBar({ job, rate, phase, error }: {
         ? (rate.uploadBytes / 1024 / 1024) / Math.max(0.01, (rate.startedAtMs - rate.uploadStartMs) / 1000)
         : 0;
 
+    // Show the server's terminal status ("failed", "completedWithErrors",
+    // "completed") in the phase label once terminal — otherwise the label
+    // reads "done" for every ending, indistinguishable from success.
+    const label = terminal ? job.status : phase;
+
     return (
         <div className="ml-auto flex items-center gap-3 text-xs text-slate-600">
             <span className="truncate max-w-[220px]">
-                {job.fileName} <span className="text-slate-400">({phase})</span>
+                {job.fileName} <span className="text-slate-400">({label})</span>
             </span>
             <div className="flex items-center gap-2">
                 <div className="w-40 h-2 bg-slate-100 rounded-full overflow-hidden">
@@ -342,13 +349,7 @@ function ProgressBar({ job, rate, phase, error }: {
                 </span>
             )}
             {job.status === "completedWithErrors" && (
-                <a
-                    href={job.errorSampleUrl}
-                    download
-                    className="text-indigo-600 hover:text-indigo-700 underline underline-offset-2"
-                >
-                    error CSV
-                </a>
+                <ErrorCsvLink jobId={job.jobId} apiKey={apiKey} />
             )}
             {error && <span className="text-rose-700">{error}</span>}
         </div>
@@ -393,6 +394,91 @@ function formatDuration(sec: number): string {
     const h = Math.floor(sec / 3600);
     const m = Math.round((sec % 3600) / 60);
     return `${h}h ${m}m`;
+}
+
+// A plain <a href download> can't set X-Api-Key (→ 401) or Accept: text/csv
+// (→ server returns JSON, which the browser saves inside a .csv file).
+// This wraps the download in a fetch that sets both headers, then triggers
+// the save via a temporary blob URL — same pattern as the CSV template /
+// sample downloads elsewhere on the page.
+function ErrorCsvLink({ jobId, apiKey }: { jobId: string; apiKey: string }) {
+    async function onClick(e: React.MouseEvent) {
+        e.preventDefault();
+        const res = await fetch(`/api/v1/bulk-jobs/${jobId}/errors`, {
+            headers: { "X-Api-Key": apiKey, "Accept": "text/csv" },
+        });
+        if (!res.ok) {
+            toast.error(`Could not download error CSV — HTTP ${res.status}`);
+            return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = `bruin-errors-${jobId}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+    return (
+        <a
+            href="#"
+            onClick={onClick}
+            className="text-indigo-600 hover:text-indigo-700 underline underline-offset-2"
+        >
+            error CSV
+        </a>
+    );
+}
+
+// Terminal-status → toaster.
+//   status=failed              → job-level reason (row_number=0). Written by
+//                                BulkJobRunner.MarkFailedAsync when the file
+//                                is malformed at the whole-file level (bad
+//                                header, empty file, missing file on disk).
+//   status=completedWithErrors → preview the first few row errors. The full
+//                                list is still one click away via the
+//                                "error CSV" link so we cap the toast at 3
+//                                rows to keep it readable.
+// Silent on status=completed.
+async function maybeToastJobLevelFailure(snap: JobSnapshot, apiKey: string): Promise<void> {
+    if (snap.status !== "failed" && snap.status !== "completedWithErrors") return;
+    try {
+        const res = await fetch(`/api/v1/bulk-jobs/${snap.jobId}/errors`, {
+            headers: { "X-Api-Key": apiKey, "Accept": "application/json" },
+        });
+        if (!res.ok) {
+            toast.error(`Job ${snap.status} — see /api/v1/bulk-jobs/${snap.jobId}/errors`);
+            return;
+        }
+        const body = await res.json() as {
+            errors?: Array<{ rowNumber: number; serviceNumber?: string | null; reason: string }>;
+        };
+        const all = body.errors ?? [];
+
+        if (snap.status === "failed") {
+            const jobLevel = all.filter((e) => e.rowNumber === 0);
+            const reason = jobLevel.length > 0
+                ? jobLevel.map((e) => e.reason).join("; ")
+                : "Job failed with no reason recorded.";
+            toast.error(`Job failed — ${reason}`);
+            return;
+        }
+
+        // completedWithErrors
+        const rowErrors = all.filter((e) => e.rowNumber > 0);
+        if (rowErrors.length === 0) return;
+        const preview = rowErrors.slice(0, 3).map((e) => {
+            const sn = e.serviceNumber ? ` (${e.serviceNumber})` : "";
+            return `row ${e.rowNumber}${sn}: ${e.reason}`;
+        }).join("\n");
+        // Prefer the server's authoritative failedRows count over
+        // rowErrors.length — the /errors endpoint caps at 500 entries.
+        const total = snap.failedRows > 0 ? snap.failedRows : rowErrors.length;
+        const remaining = total - Math.min(3, rowErrors.length);
+        const suffix = remaining > 0 ? `\n…and ${remaining} more (see error CSV)` : "";
+        toast.error(`${total} row${total === 1 ? "" : "s"} failed:\n${preview}${suffix}`, 15000);
+    } catch {
+        toast.error("Job errors — could not fetch details.");
+    }
 }
 
 // The API's 4xx responses are RFC 7807 ProblemDetails JSON — parse and

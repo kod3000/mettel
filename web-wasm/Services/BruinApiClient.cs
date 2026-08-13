@@ -125,6 +125,15 @@ public sealed class BruinApiClient
         return (await res.Content.ReadFromJsonAsync<BulkJobStatus>(Json, ct))!;
     }
 
+    public async Task<BulkJobErrorsResponse> GetBulkJobErrorsAsync(string id, CancellationToken ct = default)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Get, $"api/v1/bulk-jobs/{Uri.EscapeDataString(id)}/errors");
+        req.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+        using var res = await _http.SendAsync(req, ct);
+        await ThrowIfProblem(res, ct);
+        return (await res.Content.ReadFromJsonAsync<BulkJobErrorsResponse>(Json, ct))!;
+    }
+
     // SSE stream of BulkJobStatus snapshots. Yields each parsed frame as
     // it arrives. Callers `await foreach` and break on completion, or on
     // the last snapshot's `.Status` reaching a terminal value.

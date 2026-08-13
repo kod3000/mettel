@@ -30,8 +30,14 @@ window.bruinDownload = {
     // Open a URL with the given tenant key as an X-Api-Key request. Since
     // the CSV endpoints stream the response, we fetch → blob → save
     // rather than window.open (which can't set headers).
+    // Sends Accept: text/csv so /bulk-jobs/{id}/errors returns CSV instead
+    // of its default JSON — otherwise we'd save a JSON body with a .csv
+    // extension. Template and sample endpoints ignore the header (they
+    // always emit text/csv) so it's safe for all callers.
     fromUrl: async (url, apiKey, filename) => {
-        const res = await fetch(url, { headers: { "X-Api-Key": apiKey } });
+        const res = await fetch(url, {
+            headers: { "X-Api-Key": apiKey, "Accept": "text/csv" },
+        });
         if (!res.ok) return;
         const blob = await res.blob();
         const objectUrl = URL.createObjectURL(blob);

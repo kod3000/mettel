@@ -42,7 +42,7 @@
     else if (_job is not null)
     {
         <div class="bulk-progress">
-            <span class="filename">@_job.FileName <span style="color:var(--slate-400)">(@_phase.ToString().ToLowerInvariant())</span></span>
+            <span class="filename">@_job.FileName <span style="color:var(--slate-400)">(@PhaseLabel())</span></span>
             <div class="bar">
                 <div class="bar-inner" style="width:@Pct(_job)%;background:@BarColor(_job.Status)"></div>
             </div>
@@ -195,6 +195,7 @@
                 {
                     _phase = Phase.Done;
                     StateHasChanged();
+                    await MaybeToastJobLevelFailureAsync(snap, ct);
                     return;
                 }
             }
@@ -225,6 +226,7 @@
                 {
                     _phase = Phase.Done;
                     StateHasChanged();
+                    await MaybeToastJobLevelFailureAsync(snap, ct);
                     return;
                 }
             }
@@ -234,6 +236,52 @@
         _error = "polling timeout — check job status manually";
         _phase = Phase.Error;
         StateHasChanged();
+    }
+
+    // Terminal-status → toaster.
+    //   status=failed              → job-level reason (rowNumber=0). Written
+    //                                by BulkJobRunner.MarkFailedAsync when
+    //                                the file is malformed at whole-file
+    //                                level (bad header, empty file, etc).
+    //   status=completedWithErrors → preview the first few row errors. The
+    //                                full list is still one click away via
+    //                                the "error CSV" link, so we cap the
+    //                                toast at 3 rows to keep it readable.
+    // Silent on status=completed.
+    private async Task MaybeToastJobLevelFailureAsync(BulkJobStatus snap, CancellationToken ct)
+    {
+        if (snap.Status != "failed" && snap.Status != "completedWithErrors") return;
+        try
+        {
+            var body = await Api.GetBulkJobErrorsAsync(snap.JobId, ct);
+            var all = body.Errors;
+
+            if (snap.Status == "failed")
+            {
+                var jobLevel = all.Where(e => e.RowNumber == 0).ToArray();
+                var reason = jobLevel.Length > 0
+                    ? string.Join("; ", jobLevel.Select(e => e.Reason))
+                    : "Job failed with no reason recorded.";
+                Toasts.Error($"Job failed — {reason}");
+                return;
+            }
+
+            // completedWithErrors
+            var rowErrors = all.Where(e => e.RowNumber > 0).ToArray();
+            if (rowErrors.Length == 0) return;
+            var preview = string.Join("\n", rowErrors.Take(3).Select(e =>
+                $"row {e.RowNumber}{(string.IsNullOrEmpty(e.ServiceNumber) ? "" : $" ({e.ServiceNumber})")}: {e.Reason}"));
+            // Prefer the server's authoritative FailedRows over rowErrors.Length —
+            // the /errors endpoint caps at 500 entries.
+            var total = snap.FailedRows > 0 ? snap.FailedRows : rowErrors.Length;
+            var remaining = total - Math.Min(3, rowErrors.Length);
+            var suffix = remaining > 0 ? $"\n…and {remaining} more (see error CSV)" : "";
+            Toasts.Error($"{total} row{(total == 1 ? "" : "s")} failed:\n{preview}{suffix}", 15000);
+        }
+        catch
+        {
+            Toasts.Error("Job errors — could not fetch details.");
+        }
     }
 
     private void UpdateRate(BulkJobStatus snap)
@@ -272,6 +320,13 @@
 
     private static bool IsTerminal(string s) =>
         s is "completed" or "completedWithErrors" or "failed";
+
+    // Show the server's terminal status once the job ends — otherwise the
+    // label reads "done" for every ending, indistinguishable from success.
+    private string PhaseLabel() =>
+        _job is not null && IsTerminal(_job.Status)
+            ? _job.Status
+            : _phase.ToString().ToLowerInvariant();
 
     private static string FormatBytes(long n)
     {
