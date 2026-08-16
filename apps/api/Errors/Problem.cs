@@ -45,6 +45,15 @@ public static class Problem
             Detail = detail,
         });
 
+    public static IResult Forbidden(string title = "Forbidden", string? detail = null)
+        => Results.Problem(new ProblemDetails
+        {
+            Type = ErrorSlugs.TypeUri(ErrorSlugs.Forbidden),
+            Title = title,
+            Status = StatusCodes.Status403Forbidden,
+            Detail = detail,
+        });
+
     public static IResult Conflict(string slug, string title, string? detail = null)
         => Results.Problem(new ProblemDetails
         {

@@ -28,7 +28,7 @@ public sealed class ApiKeyHandler : DelegatingHandler
     {
         var tenant = _tenant.Current;
         request.Headers.Remove("X-Api-Key");
-        request.Headers.Add("X-Api-Key", tenant.ApiKey);
+        request.Headers.Add("X-Api-Key", _tenant.CurrentApiKey);
 
         var min = _lsn.Get(tenant.Id);
         if (!string.IsNullOrEmpty(min))

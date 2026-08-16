@@ -41,9 +41,13 @@ interface Props {
     // Passed from App so bulk upload uses the same key as everything else in
     // the tree — no fallbacks, no reaching into the ApiClient's internals.
     apiKey: string;
+    // Reader keys 403 on POST /bulk-jobs; hide the upload UI entirely to
+    // avoid a click-then-fail interaction. Read-only tenants still see the
+    // "CSV template" / "Sample 500k CSV" download links.
+    canWrite: boolean;
 }
 
-export function BulkUploadPanel({ apiKey }: Props) {
+export function BulkUploadPanel({ apiKey, canWrite }: Props) {
     const qc = useQueryClient();
     const fileRef = useRef<HTMLInputElement>(null);
     const [job, setJob] = useState<JobSnapshot | null>(null);
@@ -178,21 +182,28 @@ export function BulkUploadPanel({ apiKey }: Props) {
     return (
         <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2 text-xs">
             <span className="text-slate-500">Bulk upload</span>
-            <input
-                ref={fileRef}
-                type="file"
-                accept=".csv,text/csv"
-                data-testid="bulk-file"
-                className="text-xs file:mr-2 file:rounded-md file:border-0 file:bg-slate-100 file:px-2 file:py-1 file:text-xs file:font-medium file:text-slate-700 hover:file:bg-slate-200"
-            />
-            <button
-                type="button"
-                onClick={upload}
-                disabled={phase === "uploading" || phase === "streaming" || phase === "polling"}
-                className="rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-white shadow-sm hover:bg-slate-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
-            >
-                Upload
-            </button>
+            {canWrite && (
+                <>
+                    <input
+                        ref={fileRef}
+                        type="file"
+                        accept=".csv,text/csv"
+                        data-testid="bulk-file"
+                        className="text-xs file:mr-2 file:rounded-md file:border-0 file:bg-slate-100 file:px-2 file:py-1 file:text-xs file:font-medium file:text-slate-700 hover:file:bg-slate-200"
+                    />
+                    <button
+                        type="button"
+                        onClick={upload}
+                        disabled={phase === "uploading" || phase === "streaming" || phase === "polling"}
+                        className="rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-white shadow-sm hover:bg-slate-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
+                    >
+                        Upload
+                    </button>
+                </>
+            )}
+            {!canWrite && (
+                <span className="italic text-slate-400">read-only role — upload disabled</span>
+            )}
             <a
                 href="#"
                 onClick={(e) => { e.preventDefault(); downloadCsv(apiKey, "/api/v1/inventory/csv-template", "inventory-template.csv"); }}

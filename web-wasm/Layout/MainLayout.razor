@@ -1,5 +1,6 @@
 @inherits LayoutComponentBase
 @inject TenantContext Tenant
+@inject MeService Me
 @inject IJSRuntime JS
 @implements IDisposable
 
@@ -18,7 +19,10 @@
             <div class="spacer"></div>
             <ClientPicker />
             <button type="button" class="btn" @onclick="OpenApiRef">API</button>
-            <button type="button" class="btn primary" @onclick="OpenCreate">+ New</button>
+            @if (Me.CanWrite)
+            {
+                <button type="button" class="btn primary" @onclick="OpenCreate">+ New</button>
+            }
         </header>
         @Body
     </div>
@@ -31,6 +35,10 @@
     protected override async Task OnInitializedAsync()
     {
         Tenant.OnChanged += HandleTenantChanged;
+        Me.OnChanged += HandleTenantChanged;
+        // Kick off the first /me fetch — TenantContext hasn't fired
+        // OnChanged yet on startup, so MeService needs an explicit nudge.
+        _ = Me.RefreshAsync();
         try { await JS.InvokeVoidAsync("bruinBeforeUnload.enable"); }
         catch { /* prerender fallback */ }
     }
@@ -43,6 +51,7 @@
     public void Dispose()
     {
         Tenant.OnChanged -= HandleTenantChanged;
+        Me.OnChanged -= HandleTenantChanged;
         _ = JS.InvokeVoidAsync("bruinBeforeUnload.disable");
     }
 }

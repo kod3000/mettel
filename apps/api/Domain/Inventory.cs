@@ -44,4 +44,9 @@ public sealed class Inventory
     // Bumped by the DB on every UPDATE via trigger; drives optimistic concurrency.
     // Contract exposes it as `rowVersion` on the wire.
     public int RowVersion { get; set; }
+
+    // Soft-delete tombstone. Null = alive; set = deleted. Every read path
+    // filters `WHERE deleted_at IS NULL`. Not surfaced on the wire — a
+    // deleted row 404s just like a non-existent one.
+    public DateTimeOffset? DeletedAt { get; set; }
 }

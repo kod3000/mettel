@@ -2,6 +2,7 @@
 @inject TenantContext Tenant
 @inject IJSRuntime JS
 @inject ToastService Toasts
+@inject MeService Me
 @implements IDisposable
 
 @* Bulk CSV upload with live progress. Matches the React SPA:
@@ -18,11 +19,18 @@
 <div class="bulk-panel">
     <span style="color:var(--slate-500);font-size:11px">Bulk upload</span>
 
-    <InputFile OnChange="OnFilePicked" accept=".csv,text/csv" class="bulk-file" />
+    @if (Me.CanWrite)
+    {
+        <InputFile OnChange="OnFilePicked" accept=".csv,text/csv" class="bulk-file" />
 
-    <button type="button" class="btn" style="font-size:11px;padding:2px 10px;background:var(--slate-800);color:white;border-color:var(--slate-800)"
-            disabled="@(_file is null || _phase is Phase.Uploading or Phase.Streaming or Phase.Polling)"
-            @onclick="UploadAsync">Upload</button>
+        <button type="button" class="btn" style="font-size:11px;padding:2px 10px;background:var(--slate-800);color:white;border-color:var(--slate-800)"
+                disabled="@(_file is null || _phase is Phase.Uploading or Phase.Streaming or Phase.Polling)"
+                @onclick="UploadAsync">Upload</button>
+    }
+    else
+    {
+        <span style="color:var(--slate-400);font-size:11px;font-style:italic">read-only role — upload disabled</span>
+    }
 
     <a href="javascript:void(0)" @onclick="DownloadTemplateAsync" style="color:var(--indigo-600);font-size:11px;text-decoration:underline">CSV template</a>
     <a href="javascript:void(0)" @onclick="DownloadSampleAsync"

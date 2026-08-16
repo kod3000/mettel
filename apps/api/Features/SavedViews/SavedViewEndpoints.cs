@@ -2,6 +2,7 @@ using System.Text.Json;
 using Bruin.Api.Data;
 using Bruin.Api.Domain;
 using Bruin.Api.Errors;
+using Bruin.Api.Features.Tenancy;
 using Dapper;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -21,12 +22,16 @@ public static class SavedViewEndpoints
         r.MapGet("/api/v1/saved-views/{id:guid}", GetAsync)
             .Produces<Contracts.SavedViewResponse>().ProducesProblem(404);
         r.MapPost("/api/v1/saved-views", CreateAsync)
+            .RequireRole(Roles.Admin, Roles.Worker)
             .Produces<Contracts.SavedViewResponse>(StatusCodes.Status201Created)
-            .ProducesProblem(400).ProducesProblem(409);
+            .ProducesProblem(400).ProducesProblem(403).ProducesProblem(409);
         r.MapPut("/api/v1/saved-views/{id:guid}", UpdateAsync)
+            .RequireRole(Roles.Admin, Roles.Worker)
             .Produces<Contracts.SavedViewResponse>()
-            .ProducesProblem(400).ProducesProblem(404);
-        r.MapDelete("/api/v1/saved-views/{id:guid}", DeleteAsync).ProducesProblem(404);
+            .ProducesProblem(400).ProducesProblem(403).ProducesProblem(404);
+        r.MapDelete("/api/v1/saved-views/{id:guid}", DeleteAsync)
+            .RequireRole(Roles.Admin, Roles.Worker)
+            .ProducesProblem(403).ProducesProblem(404);
     }
 
     private static async Task<IResult> ListAsync(ITenantContext t, IReadRouter db, CancellationToken ct)

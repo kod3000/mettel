@@ -11,6 +11,8 @@ public sealed class BruinDbContext(
     ITenantContext? tenant = null) : DbContext(options)
 {
     public DbSet<Client> Clients => Set<Client>();
+    public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
+    public DbSet<FieldPolicy> FieldPolicies => Set<FieldPolicy>();
     public DbSet<Inventory> Inventory => Set<Inventory>();
     public DbSet<BulkJob> BulkJobs => Set<BulkJob>();
     public DbSet<BulkJobError> BulkJobErrors => Set<BulkJobError>();
@@ -36,6 +38,32 @@ public sealed class BruinDbContext(
             e.HasIndex(x => x.ApiKey).IsUnique().HasDatabaseName("ux_client_api_key");
         });
 
+        b.Entity<ApiKey>(e =>
+        {
+            e.ToTable("api_key");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasColumnName("id").HasColumnType("uuid");
+            e.Property(x => x.ClientId).HasColumnName("client_id").HasColumnType("uuid").IsRequired();
+            e.Property(x => x.Key).HasColumnName("key").HasMaxLength(128).IsRequired();
+            e.Property(x => x.Role).HasColumnName("role").HasMaxLength(16).IsRequired();
+            e.Property(x => x.Label).HasColumnName("label").HasMaxLength(120);
+            e.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz")
+                .HasDefaultValueSql("now()");
+            e.HasIndex(x => x.Key).IsUnique().HasDatabaseName("ux_api_key_key");
+            e.HasIndex(x => new { x.ClientId, x.Role }).HasDatabaseName("ix_api_key_client_role");
+            e.HasOne<Client>().WithMany().HasForeignKey(x => x.ClientId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<FieldPolicy>(e =>
+        {
+            e.ToTable("field_policy");
+            e.HasKey(x => new { x.ClientId, x.FieldName });
+            e.Property(x => x.ClientId).HasColumnName("client_id").HasColumnType("uuid");
+            e.Property(x => x.FieldName).HasColumnName("field_name").HasMaxLength(64);
+            e.Property(x => x.MinRole).HasColumnName("min_role").HasMaxLength(16).IsRequired();
+            e.HasOne<Client>().WithMany().HasForeignKey(x => x.ClientId).OnDelete(DeleteBehavior.Cascade);
+        });
+
         b.Entity<Inventory>(e =>
         {
             e.ToTable("inventory");
@@ -56,6 +84,7 @@ public sealed class BruinDbContext(
             e.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz")
                 .HasDefaultValueSql("now()");
             e.Property(x => x.RowVersion).HasColumnName("row_version").HasDefaultValue(1);
+            e.Property(x => x.DeletedAt).HasColumnName("deleted_at").HasColumnType("timestamptz");
 
             // FK is scoped explicitly so RLS on inventory doesn't accidentally
             // cascade to client rows.

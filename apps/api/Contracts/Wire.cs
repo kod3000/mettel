@@ -5,6 +5,12 @@ namespace Bruin.Api.Contracts;
 // OpenAPI + TypeScript client — handlers must not return anonymous objects
 // anymore (they don't show up in the schema, which breaks Phase 7 codegen).
 
+// GET /api/v1/me — SPA fetches once on mount to gate role-restricted UI.
+public sealed record MeResponse(
+    Guid ClientId,
+    string Role,
+    IReadOnlyList<string> AdminOnlyFields);
+
 public sealed record InventoryRow(
     Guid Id,
     string ServiceNumber,

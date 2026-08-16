@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { ApiContext } from "./api/context.js";
 import { createClient, inMemoryLsnStore } from "./api/client.js";
+import { useMe } from "./api/me.js";
 import { InventoryGrid } from "./components/InventoryGrid.js";
 // PixiJS is ~150KB gzipped — lazy-imported so users on the DOM grid never
 // pay the download cost. The Suspense fallback is a plain skeleton because
@@ -18,7 +19,10 @@ import { ClientPicker } from "./components/ClientPicker.js";
 import { RowDetailDrawer } from "./components/RowDetailDrawer.js";
 import { ApiReferencePanel } from "./components/ApiReferencePanel.js";
 import { Toaster } from "./components/Toaster.js";
-import { loadTenant, saveTenant, type Tenant } from "./tenants.js";
+import {
+    apiKeyForRole, loadRole, loadTenant, saveRole, saveTenant,
+    type Role, type Tenant,
+} from "./tenants.js";
 import type { InventoryRow, ListParams } from "./api/inventory.js";
 
 // Vite bakes VITE_API_KEY at build time if it's set; otherwise the picker
@@ -46,13 +50,25 @@ function saveGpuHover(on: boolean): void {
 
 export default function App() {
     const [tenant, setTenant] = useState<Tenant>(() => loadTenant());
-    return <AppShell tenant={tenant} onTenantChange={(t) => { saveTenant(t); setTenant(t); }} />;
+    const [role, setRole] = useState<Role>(() => loadRole());
+    return (
+        <AppShell
+            tenant={tenant}
+            role={role}
+            onTenantChange={(t) => { saveTenant(t); setTenant(t); }}
+            onRoleChange={(r) => { saveRole(r); setRole(r); }}
+        />
+    );
 }
 
-// AppShell is keyed on the tenant so switching client remounts the whole
+// AppShell is keyed on tenant + role so switching either remounts the whole
 // tree — every hook state, every query cache, every LSN watermark starts
 // fresh. Simpler and safer than reaching into caches to purge tenant-A rows.
-function AppShell({ tenant, onTenantChange }: { tenant: Tenant; onTenantChange: (t: Tenant) => void; }) {
+function AppShell({ tenant, role, onTenantChange, onRoleChange }: {
+    tenant: Tenant; role: Role;
+    onTenantChange: (t: Tenant) => void;
+    onRoleChange: (r: Role) => void;
+}) {
     const [params, setParams] = useState<ListParams>({ pageSize: 100 });
     const [createOpen, setCreateOpen] = useState(false);
     const [selectedRow, setSelectedRow] = useState<InventoryRow | null>(null);
@@ -79,7 +95,7 @@ function AppShell({ tenant, onTenantChange }: { tenant: Tenant; onTenantChange: 
         return () => window.removeEventListener("beforeunload", onBeforeUnload);
     }, []);
 
-    const apiKey = BUILT_IN_OVERRIDE ?? tenant.apiKey;
+    const apiKey = BUILT_IN_OVERRIDE ?? apiKeyForRole(tenant, role);
 
     const client = useMemo(() => createClient({
         apiKey,
@@ -94,76 +110,132 @@ function AppShell({ tenant, onTenantChange }: { tenant: Tenant; onTenantChange: 
     return (
         <ApiContext.Provider value={client}>
             <QueryClientProvider client={qc}>
-                <div key={tenant.id} className="h-screen flex flex-col bg-slate-50 text-slate-900">
-                    <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-3 shadow-sm">
-                        <div className="flex-1">
-                            <h1 className="text-base font-semibold tracking-tight">Bruin Inventory Grid</h1>
-                            <p className="text-xs text-slate-500">MetTel Bruin Platform — fun-times</p>
-                        </div>
-                        <GpuToggle value={gpuHover} onChange={setGpuHoverPersistent} />
-                        <ClientPicker value={tenant} onChange={onTenantChange} />
-                        <button
-                            type="button"
-                            onClick={() => setApiRefOpen(true)}
-                            data-testid="btn-api-ref"
-                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                        >
-                            API
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setCreateOpen(true)}
-                            data-testid="btn-new"
-                            className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
-                        >
-                            + New
-                        </button>
-                    </header>
-                    <SavedViewsBar params={params} onApply={setParams} />
-                    <BulkUploadPanel apiKey={apiKey} />
-                    <Filters value={params} onChange={setParams} />
-                    <div className="flex-1 min-h-0">
-                        {gpuHover ? (
-                            <Suspense
-                                fallback={
-                                    <div className="h-full flex items-center justify-center text-sm text-slate-500">
-                                        Loading GPU renderer…
-                                    </div>
-                                }
-                            >
-                                <InventoryGridGpu
-                                    params={params}
-                                    onParamsChange={setParams}
-                                    onRowSelect={setSelectedRow}
-                                />
-                            </Suspense>
-                        ) : (
-                            <InventoryGrid
-                                params={params}
-                                onParamsChange={setParams}
-                                onRowSelect={setSelectedRow}
-                                gpuHover={false}
-                            />
-                        )}
-                    </div>
-                    <CreateInventoryModal open={createOpen} onClose={() => setCreateOpen(false)} />
-                    {selectedRow && (
-                        <RowDetailDrawer
-                            id={selectedRow.id}
-                            onClose={() => setSelectedRow(null)}
-                        />
-                    )}
-                    {apiRefOpen && (
-                        <ApiReferencePanel
-                            apiKey={apiKey}
-                            tenantLabel={tenant.label}
-                            onClose={() => setApiRefOpen(false)}
-                        />
-                    )}
-                    <Toaster />
-                </div>
+                <AppShellInner
+                    tenant={tenant}
+                    role={role}
+                    apiKey={apiKey}
+                    params={params}
+                    setParams={setParams}
+                    createOpen={createOpen}
+                    setCreateOpen={setCreateOpen}
+                    selectedRow={selectedRow}
+                    setSelectedRow={setSelectedRow}
+                    apiRefOpen={apiRefOpen}
+                    setApiRefOpen={setApiRefOpen}
+                    gpuHover={gpuHover}
+                    setGpuHover={setGpuHoverPersistent}
+                    onTenantChange={onTenantChange}
+                    onRoleChange={onRoleChange}
+                />
             </QueryClientProvider>
         </ApiContext.Provider>
+    );
+}
+
+// Split so useMe() (needs the QueryClient) sits inside the provider.
+function AppShellInner(props: {
+    tenant: Tenant; role: Role; apiKey: string;
+    params: ListParams; setParams: (p: ListParams) => void;
+    createOpen: boolean; setCreateOpen: (v: boolean) => void;
+    selectedRow: InventoryRow | null; setSelectedRow: (r: InventoryRow | null) => void;
+    apiRefOpen: boolean; setApiRefOpen: (v: boolean) => void;
+    gpuHover: boolean; setGpuHover: (v: boolean) => void;
+    onTenantChange: (t: Tenant) => void;
+    onRoleChange: (r: Role) => void;
+}) {
+    const {
+        tenant, role, apiKey, params, setParams, createOpen, setCreateOpen,
+        selectedRow, setSelectedRow, apiRefOpen, setApiRefOpen,
+        gpuHover, setGpuHover, onTenantChange, onRoleChange,
+    } = props;
+
+    const me = useMe(apiKey);
+    // Defensive: if /me hasn't loaded or errored, default to reader (write
+    // UI stays hidden). Server enforcement is authoritative regardless.
+    const effectiveRole: Role = me.data?.role ?? (me.isPending ? role : "reader");
+    const canWrite  = effectiveRole === "admin" || effectiveRole === "worker";
+    const canDelete = effectiveRole === "admin";
+    const adminOnlyFields = me.data?.adminOnlyFields ?? [];
+
+    return (
+        <div key={`${tenant.id}:${role}`} className="h-screen flex flex-col bg-slate-50 text-slate-900">
+            <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-3 shadow-sm">
+                <div className="flex-1">
+                    <h1 className="text-base font-semibold tracking-tight">Bruin Inventory Grid</h1>
+                    <p className="text-xs text-slate-500">MetTel Bruin Platform — fun-times</p>
+                </div>
+                <GpuToggle value={gpuHover} onChange={setGpuHover} />
+                <ClientPicker
+                    tenant={tenant}
+                    role={role}
+                    onTenantChange={onTenantChange}
+                    onRoleChange={onRoleChange}
+                />
+                <button
+                    type="button"
+                    onClick={() => setApiRefOpen(true)}
+                    data-testid="btn-api-ref"
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                    API
+                </button>
+                {canWrite && (
+                    <button
+                        type="button"
+                        onClick={() => setCreateOpen(true)}
+                        data-testid="btn-new"
+                        className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+                    >
+                        + New
+                    </button>
+                )}
+            </header>
+            <SavedViewsBar params={params} onApply={setParams} canWrite={canWrite} />
+            <BulkUploadPanel apiKey={apiKey} canWrite={canWrite} />
+            <Filters value={params} onChange={setParams} />
+            <div className="flex-1 min-h-0">
+                {gpuHover ? (
+                    <Suspense
+                        fallback={
+                            <div className="h-full flex items-center justify-center text-sm text-slate-500">
+                                Loading GPU renderer…
+                            </div>
+                        }
+                    >
+                        <InventoryGridGpu
+                            params={params}
+                            onParamsChange={setParams}
+                            onRowSelect={setSelectedRow}
+                        />
+                    </Suspense>
+                ) : (
+                    <InventoryGrid
+                        params={params}
+                        onParamsChange={setParams}
+                        onRowSelect={setSelectedRow}
+                        gpuHover={false}
+                    />
+                )}
+            </div>
+            <CreateInventoryModal open={createOpen} onClose={() => setCreateOpen(false)} />
+            {selectedRow && (
+                <RowDetailDrawer
+                    id={selectedRow.id}
+                    canWrite={canWrite}
+                    canDelete={canDelete}
+                    adminOnlyFields={adminOnlyFields}
+                    onClose={() => setSelectedRow(null)}
+                />
+            )}
+            {apiRefOpen && (
+                <ApiReferencePanel
+                    apiKey={apiKey}
+                    tenantLabel={tenant.label}
+                    onClose={() => setApiRefOpen(false)}
+                />
+            )}
+            <Toaster />
+        </div>
     );
 }
 

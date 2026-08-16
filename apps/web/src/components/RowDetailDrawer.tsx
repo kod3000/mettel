@@ -15,13 +15,17 @@
 //     list refetch reads through the primary if the replica hasn't caught up.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { ApiError } from "../api/client.js";
 import { useApi } from "../api/context.js";
+import { toast } from "./Toaster.js";
 import {
+    deleteInventory,
     detailQueryKey,
     getInventory,
+    patchInventory,
     patchStatus,
+    type InventoryPatch,
     type InventoryRow,
     type StatusChangeResponse,
 } from "../api/inventory.js";
@@ -29,6 +33,14 @@ import {
 interface Props {
     id: string;
     onClose: () => void;
+    // Reader keys 403 on PATCH status; hide the entire "Change status"
+    // section so read-only tenants can inspect a row without a dead panel.
+    canWrite: boolean;
+    // Admin-only: shows the Delete button (which soft-deletes the row).
+    canDelete: boolean;
+    // Fields the current role is not allowed to write per field_policy.
+    // Inputs for these are rendered read-only in edit mode.
+    adminOnlyFields: string[];
 }
 
 // Client-side mirror of apps/api/Domain/StatusTransitions.cs. Kept short
@@ -48,9 +60,18 @@ const shouldRetry = (failureCount: number, error: unknown): boolean => {
 };
 const retryDelay = (attempt: number) => Math.min(1000 * 2 ** attempt, 8000);
 
-export function RowDetailDrawer({ id, onClose }: Props) {
+export function RowDetailDrawer({ id, onClose, canWrite, canDelete, adminOnlyFields }: Props) {
     const client = useApi();
     const qc = useQueryClient();
+
+    // Edit-mode local state. `draft` holds only the fields the user has
+    // touched (undefined = "leave as-is on save"); `fieldErrors` mirrors
+    // ProblemDetails.Extensions.errors from a failed save so inputs can
+    // highlight per-field messages inline.
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState<Record<string, string | null>>({});
+    const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
+    const [confirmDelete, setConfirmDelete] = useState(false);
 
     const detail = useQuery<InventoryRow, ApiError>({
         queryKey: detailQueryKey(id),
@@ -84,6 +105,43 @@ export function RowDetailDrawer({ id, onClose }: Props) {
         },
     });
 
+    const patchMut = useMutation<InventoryRow, ApiError, InventoryPatch>({
+        mutationFn: (body) => patchInventory(client, id, body),
+        retry: shouldRetry,
+        retryDelay,
+        onSuccess: async () => {
+            setEditing(false);
+            setDraft({});
+            setFieldErrors({});
+            await Promise.all([
+                qc.invalidateQueries({ queryKey: detailQueryKey(id) }),
+                qc.invalidateQueries({ queryKey: ["inventory", "list"] }),
+            ]);
+        },
+        onError: async (err) => {
+            // ProblemDetails.errors is at the top level per aliases.ts.
+            const errs = err.problem.errors ?? null;
+            if (errs) setFieldErrors(errs);
+            if (err.isSlug("concurrency-conflict")) {
+                await qc.invalidateQueries({ queryKey: detailQueryKey(id) });
+            } else if (!errs) {
+                toast.error(err.problem.detail ?? err.problem.title ?? "Save failed");
+            }
+        },
+    });
+
+    const delMut = useMutation<void, ApiError>({
+        mutationFn: () => deleteInventory(client, id),
+        onSuccess: async () => {
+            toast.info("Row deleted.");
+            await qc.invalidateQueries({ queryKey: ["inventory", "list"] });
+            onClose();
+        },
+        onError: (err) => {
+            toast.error(err.problem.detail ?? err.problem.title ?? "Delete failed");
+        },
+    });
+
     // Esc-to-close; disabled while a mutation is in flight so the user can't
     // dismiss a request they're waiting on.
     useEffect(() => {
@@ -95,8 +153,34 @@ export function RowDetailDrawer({ id, onClose }: Props) {
     }, [mut.isPending, onClose]);
 
     const row = detail.data;
-    const busy = mut.isPending;
-    const backdropClose = () => { if (!busy) onClose(); };
+    const busy = mut.isPending || patchMut.isPending || delMut.isPending;
+    const backdropClose = () => { if (!busy && !editing) onClose(); };
+    const readOnlySet = new Set(adminOnlyFields);
+    const draftValue = (k: keyof InventoryRow): string =>
+        (draft[k as string] ?? (row?.[k] as string | null | undefined) ?? "") as string;
+    const setField = (k: string, v: string | null) => {
+        setDraft((d) => ({ ...d, [k]: v }));
+        setFieldErrors((e) => { const { [k]: _drop, ...rest } = e; return rest; });
+    };
+    const startEdit = () => { setDraft({}); setFieldErrors({}); setEditing(true); };
+    const cancelEdit = () => { setDraft({}); setFieldErrors({}); setEditing(false); };
+    const saveEdit = () => {
+        if (!row) return;
+        // Only send fields that actually changed vs. the current row.
+        const body: Record<string, unknown> = { rowVersion: row.rowVersion };
+        for (const [k, v] of Object.entries(draft)) {
+            const currentVal = (row[k as keyof InventoryRow] as string | null | undefined) ?? null;
+            // Empty string on an optional field = clear (null); on a
+            // required field it's caught by server-side validation.
+            const normalized = v === "" ? null : v;
+            if (normalized !== currentVal) body[k] = normalized;
+        }
+        if (Object.keys(body).length === 1) { // only rowVersion — no changes
+            cancelEdit();
+            return;
+        }
+        patchMut.mutate(body as unknown as InventoryPatch);
+    };
 
     return (
         <div
@@ -144,43 +228,90 @@ export function RowDetailDrawer({ id, onClose }: Props) {
                     ) : detail.isError && !isRecovering(detail.failureCount, detail.isFetching) ? (
                         <TerminalError err={detail.error} onDismiss={onClose} />
                     ) : row ? (
-                        <>
-                            <FieldRow label="Product">
-                                <div className="text-sm text-slate-900">{row.productName}</div>
-                                <div className="text-[11px] uppercase tracking-wide text-slate-500">
-                                    {row.productCategory}
-                                </div>
-                            </FieldRow>
-                            <FieldRow label="Status">
-                                <StatusBadge s={row.status} />
-                            </FieldRow>
-                            <FieldRow label="Assignee">
-                                <div className="text-sm font-mono text-slate-700">{row.assignee ?? "—"}</div>
-                            </FieldRow>
-                            <FieldRow label="Location">
-                                <div className="text-sm text-slate-800">
-                                    {[row.city, row.state].filter(Boolean).join(", ") || "—"}
-                                </div>
-                                {row.address && (
-                                    <div className="text-xs text-slate-500 mt-0.5">{row.address}</div>
-                                )}
-                            </FieldRow>
-                            {row.notes && (
-                                <FieldRow label="Notes">
-                                    <div className="text-sm text-slate-800 whitespace-pre-wrap">{row.notes}</div>
+                        editing ? (
+                            <EditForm
+                                row={row}
+                                draftValue={draftValue}
+                                setField={setField}
+                                fieldErrors={fieldErrors}
+                                readOnlySet={readOnlySet}
+                                saving={patchMut.isPending}
+                                onSave={saveEdit}
+                                onCancel={cancelEdit}
+                            />
+                        ) : (
+                            <>
+                                <FieldRow label="Service #">
+                                    <div className="text-sm font-mono text-slate-800">{row.serviceNumber}</div>
                                 </FieldRow>
-                            )}
-                            <FieldRow label="Audit">
-                                <div className="text-xs text-slate-600 tabular-nums">
-                                    <div>Created&nbsp;{fmt(row.createdAt)}</div>
-                                    <div>Updated&nbsp;{fmt(row.updatedAt)}</div>
-                                    <div>Row version&nbsp;<span className="font-mono">{row.rowVersion}</span></div>
-                                </div>
-                            </FieldRow>
+                                <FieldRow label="Product">
+                                    <div className="text-sm text-slate-900">{row.productName}</div>
+                                    <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                                        {row.productCategory}
+                                    </div>
+                                </FieldRow>
+                                <FieldRow label="Status">
+                                    <StatusBadge s={row.status} />
+                                </FieldRow>
+                                <FieldRow label="Assignee">
+                                    <div className="text-sm font-mono text-slate-700">{row.assignee ?? "—"}</div>
+                                </FieldRow>
+                                <FieldRow label="Location">
+                                    <div className="text-sm text-slate-800">
+                                        {[row.city, row.state].filter(Boolean).join(", ") || "—"}
+                                    </div>
+                                    {row.address && (
+                                        <div className="text-xs text-slate-500 mt-0.5">{row.address}</div>
+                                    )}
+                                </FieldRow>
+                                {row.notes && (
+                                    <FieldRow label="Notes">
+                                        <div className="text-sm text-slate-800 whitespace-pre-wrap">{row.notes}</div>
+                                    </FieldRow>
+                                )}
+                                <FieldRow label="Audit">
+                                    <div className="text-xs text-slate-600 tabular-nums">
+                                        <div>Created&nbsp;{fmt(row.createdAt)}</div>
+                                        <div>Updated&nbsp;{fmt(row.updatedAt)}</div>
+                                        <div>Row version&nbsp;<span className="font-mono">{row.rowVersion}</span></div>
+                                    </div>
+                                </FieldRow>
 
-                            <ActionPanel row={row} mut={mut} />
-                        </>
+                                {canWrite && (
+                                    <div className="mt-2 border-t border-slate-200 pt-3 flex flex-wrap gap-2">
+                                        <button
+                                            type="button"
+                                            data-testid="btn-edit"
+                                            onClick={startEdit}
+                                            className="rounded-md px-3 py-1.5 text-xs font-medium border bg-white border-slate-300 text-slate-700 hover:bg-slate-50"
+                                        >
+                                            Edit fields
+                                        </button>
+                                        {canDelete && (
+                                            <button
+                                                type="button"
+                                                data-testid="btn-delete"
+                                                onClick={() => setConfirmDelete(true)}
+                                                disabled={delMut.isPending}
+                                                className="rounded-md px-3 py-1.5 text-xs font-medium border bg-white border-rose-300 text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                                            >
+                                                Delete row
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
+                                {canWrite && <ActionPanel row={row} mut={mut} />}
+                            </>
+                        )
                     ) : null}
+                    {confirmDelete && row && (
+                        <ConfirmDelete
+                            row={row}
+                            pending={delMut.isPending}
+                            onConfirm={() => { setConfirmDelete(false); delMut.mutate(); }}
+                            onCancel={() => setConfirmDelete(false)}
+                        />
+                    )}
                 </div>
             </aside>
         </div>
@@ -381,6 +512,201 @@ function Spinner() {
             <circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.25" strokeWidth="3" />
             <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
         </svg>
+    );
+}
+
+// Edit-mode form. Simple stacked inputs — one per writable column. Fields
+// listed in adminOnlyFields render as read-only for the current role
+// (workers) with a small "admin only" hint so the operator sees why they
+// can't edit. Server-side field_policy still enforces this on save.
+function EditForm({
+    row, draftValue, setField, fieldErrors, readOnlySet, saving, onSave, onCancel,
+}: {
+    row: InventoryRow;
+    draftValue: (k: keyof InventoryRow) => string;
+    setField: (k: string, v: string | null) => void;
+    fieldErrors: Record<string, string[]>;
+    readOnlySet: Set<string>;
+    saving: boolean;
+    onSave: () => void;
+    onCancel: () => void;
+}) {
+    const categories = ["voice", "data", "wireless", "other"] as const;
+    return (
+        <form
+            onSubmit={(e) => { e.preventDefault(); onSave(); }}
+            data-testid="row-edit-form"
+            className="space-y-3"
+        >
+            <EditField label="Service #" name="serviceNumber" required
+                value={draftValue("serviceNumber")}
+                onChange={(v) => setField("serviceNumber", v)}
+                readOnly={readOnlySet.has("serviceNumber")}
+                errors={fieldErrors.serviceNumber} />
+            <EditField label="Product name" name="productName" required
+                value={draftValue("productName")}
+                onChange={(v) => setField("productName", v)}
+                readOnly={readOnlySet.has("productName")}
+                errors={fieldErrors.productName} />
+            <div>
+                <label className="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">
+                    Category
+                    {readOnlySet.has("productCategory") && <span className="ml-1 text-slate-400 lowercase italic">(admin only)</span>}
+                </label>
+                <select
+                    value={draftValue("productCategory")}
+                    disabled={readOnlySet.has("productCategory") || saving}
+                    onChange={(e) => setField("productCategory", e.target.value)}
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-800 disabled:bg-slate-100 disabled:text-slate-500"
+                >
+                    {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+                {fieldErrors.productCategory?.map((m, i) => (
+                    <div key={i} className="mt-1 text-xs text-rose-700">{m}</div>
+                ))}
+            </div>
+            <EditField label="City" name="city"
+                value={draftValue("city")}
+                onChange={(v) => setField("city", v)}
+                readOnly={readOnlySet.has("city")}
+                errors={fieldErrors.city} />
+            <EditField label="State" name="state"
+                value={draftValue("state")}
+                onChange={(v) => setField("state", v)}
+                readOnly={readOnlySet.has("state")}
+                errors={fieldErrors.state} />
+            <EditField label="Address" name="address"
+                value={draftValue("address")}
+                onChange={(v) => setField("address", v)}
+                readOnly={readOnlySet.has("address")}
+                errors={fieldErrors.address} />
+            <EditField label="Assignee" name="assignee"
+                value={draftValue("assignee")}
+                onChange={(v) => setField("assignee", v)}
+                readOnly={readOnlySet.has("assignee")}
+                errors={fieldErrors.assignee} />
+            <div>
+                <label className="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">Notes</label>
+                <textarea
+                    value={draftValue("notes")}
+                    disabled={readOnlySet.has("notes") || saving}
+                    onChange={(e) => setField("notes", e.target.value)}
+                    rows={3}
+                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-800 disabled:bg-slate-100"
+                />
+                {fieldErrors.notes?.map((m, i) => (
+                    <div key={i} className="mt-1 text-xs text-rose-700">{m}</div>
+                ))}
+            </div>
+            <div className="text-[11px] text-slate-500">
+                Editing row version <span className="font-mono">{row.rowVersion}</span>. A concurrent
+                update will 409 and reload the drawer.
+            </div>
+            <div className="flex gap-2 pt-1">
+                <button
+                    type="submit"
+                    data-testid="btn-save"
+                    disabled={saving}
+                    className="rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-500 disabled:opacity-60"
+                >
+                    {saving ? "Saving…" : "Save"}
+                </button>
+                <button
+                    type="button"
+                    onClick={onCancel}
+                    disabled={saving}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                    Cancel
+                </button>
+            </div>
+        </form>
+    );
+}
+
+function EditField({
+    label, name, value, onChange, readOnly, required, errors,
+}: {
+    label: string;
+    name: string;
+    value: string;
+    onChange: (v: string) => void;
+    readOnly?: boolean;
+    required?: boolean;
+    errors?: string[];
+}) {
+    return (
+        <div>
+            <label htmlFor={`edit-${name}`} className="block text-[11px] uppercase tracking-wide text-slate-500 mb-1">
+                {label}
+                {required && <span className="text-rose-600"> *</span>}
+                {readOnly && <span className="ml-1 text-slate-400 lowercase italic">(admin only)</span>}
+            </label>
+            <input
+                id={`edit-${name}`}
+                type="text"
+                value={value}
+                readOnly={readOnly}
+                onChange={(e) => onChange(e.target.value)}
+                className="w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-800 read-only:bg-slate-100 read-only:text-slate-500"
+            />
+            {errors?.map((m, i) => (
+                <div key={i} className="mt-1 text-xs text-rose-700">{m}</div>
+            ))}
+        </div>
+    );
+}
+
+function ConfirmDelete({
+    row, pending, onConfirm, onCancel,
+}: {
+    row: InventoryRow;
+    pending: boolean;
+    onConfirm: () => void;
+    onCancel: () => void;
+}) {
+    return (
+        <div
+            role="alertdialog"
+            aria-labelledby="confirm-delete-title"
+            className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4"
+            onClick={onCancel}
+        >
+            <div
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-sm rounded-lg bg-white shadow-xl border border-slate-200 p-4"
+            >
+                <div id="confirm-delete-title" className="text-sm font-semibold text-slate-900">
+                    Delete inventory row?
+                </div>
+                <div className="mt-1 text-xs text-slate-600">
+                    <span className="font-mono">{row.serviceNumber}</span> — {row.productName}
+                </div>
+                <div className="mt-2 text-xs text-slate-500">
+                    Soft delete: the row is hidden from lists but kept for audit. You can re-create
+                    the same service number afterwards.
+                </div>
+                <div className="mt-4 flex justify-end gap-2">
+                    <button
+                        type="button"
+                        onClick={onCancel}
+                        disabled={pending}
+                        className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        data-testid="btn-confirm-delete"
+                        onClick={onConfirm}
+                        disabled={pending}
+                        className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-rose-500 disabled:opacity-60"
+                    >
+                        {pending ? "Deleting…" : "Delete"}
+                    </button>
+                </div>
+            </div>
+        </div>
     );
 }
 

@@ -1,0 +1,41 @@
+@* Reusable text-input row for the RowDetailDrawer edit form. Kept out
+   of the drawer file so its many inline lambdas don't force per-field
+   escape-quoting inside Razor attributes (which the parser rejects
+   with CS1056 — see session handoff notes). *@
+
+<div class="edit-block">
+    <label for="@InputId">
+        @Label
+        @if (Required) { <span style="color:#e11d48"> *</span> }
+        @if (ReadOnly) { <span class="ro-hint">(admin only)</span> }
+    </label>
+    <input id="@InputId" type="text"
+           value="@Value"
+           readonly="@ReadOnly"
+           @oninput="OnInput" />
+    @if (Errors is not null)
+    {
+        @foreach (var m in Errors) { <div class="ferr">@m</div> }
+    }
+</div>
+
+<style>
+    .edit-block input { width: 100%; padding: 4px 8px; font-size: 13px;
+        border: 1px solid var(--slate-300); border-radius: 6px; background: white; }
+    .edit-block input:read-only { background: var(--slate-100); color: var(--slate-500); }
+</style>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter, EditorRequired] public string Name { get; set; } = "";
+    [Parameter] public string Value { get; set; } = "";
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter] public bool ReadOnly { get; set; }
+    [Parameter] public bool Required { get; set; }
+    [Parameter] public string[]? Errors { get; set; }
+
+    private string InputId => $"edit-{Name}";
+
+    private Task OnInput(ChangeEventArgs e) =>
+        ValueChanged.InvokeAsync(e.Value?.ToString() ?? "");
+}

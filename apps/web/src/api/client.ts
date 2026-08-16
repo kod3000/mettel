@@ -63,6 +63,8 @@ export interface ApiClient {
     get<T>(path: string, opts?: Omit<RequestOptions, "method" | "body">): Promise<T>;
     post<T>(path: string, body: unknown, opts?: Omit<RequestOptions, "method" | "body">): Promise<T>;
     patch<T>(path: string, body: unknown, opts?: Omit<RequestOptions, "method" | "body">): Promise<T>;
+    del<T = void>(path: string, opts?: Omit<RequestOptions, "method" | "body">): Promise<T>;
+    apiKey: string;
 }
 
 export function createClient(opts: ApiClientOptions): ApiClient {
@@ -114,6 +116,8 @@ export function createClient(opts: ApiClientOptions): ApiClient {
         get:   (p, o) => request(p,     { ...o, method: "GET" }),
         post:  (p, b, o) => request(p, { ...o, method: "POST", body: b }),
         patch: (p, b, o) => request(p, { ...o, method: "PATCH", body: b }),
+        del:   (p, o) => request(p,     { ...o, method: "DELETE" }),
+        apiKey: opts.apiKey,
     };
 }
 

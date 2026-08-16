@@ -85,3 +85,31 @@ export async function patchStatus(
     return await client.patch<StatusChangeResponse>(
         `/api/v1/inventory/${encodeURIComponent(id)}/status`, body, opts);
 }
+
+// Arbitrary-field patch. Body: { rowVersion, [field]: value | null }.
+// Fields absent from the body are left untouched; null clears (for
+// nullable columns). Returns the full updated row.
+export interface InventoryPatch {
+    rowVersion: number;
+    serviceNumber?: string;
+    productCategory?: string;
+    productName?: string;
+    city?: string | null;
+    state?: string | null;
+    address?: string | null;
+    assignee?: string | null;
+    notes?: string | null;
+}
+export async function patchInventory(
+    client: ApiClient, id: string, body: InventoryPatch, opts?: Pick<RequestOptions, "signal">,
+): Promise<InventoryRow> {
+    return await client.patch<InventoryRow>(
+        `/api/v1/inventory/${encodeURIComponent(id)}`, body, opts);
+}
+
+// Soft-delete. 204 on success; 404 if the row was already deleted (idempotent).
+export async function deleteInventory(
+    client: ApiClient, id: string, opts?: Pick<RequestOptions, "signal">,
+): Promise<void> {
+    await client.del<void>(`/api/v1/inventory/${encodeURIComponent(id)}`, opts);
+}

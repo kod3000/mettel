@@ -33,6 +33,7 @@ var baseAddress = string.IsNullOrWhiteSpace(apiBase)
 builder.Services.AddSingleton<TenantContext>();
 builder.Services.AddSingleton<LsnStore>();
 builder.Services.AddSingleton<ToastService>();
+builder.Services.AddSingleton<MeService>();
 builder.Services.AddTransient<ApiKeyHandler>();
 
 builder.Services.AddHttpClient<BruinApiClient>(c => c.BaseAddress = baseAddress)

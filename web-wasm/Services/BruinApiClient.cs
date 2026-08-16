@@ -73,6 +73,26 @@ public sealed class BruinApiClient
         return (await res.Content.ReadFromJsonAsync<InventoryRow>(Json, ct))!;
     }
 
+    // Arbitrary-field patch. Body is IReadOnlyDictionary<string, object?> so
+    // the drawer only sends fields that actually changed — `null` values
+    // clear nullable columns; absent keys leave columns untouched. The
+    // server-side WriteHandler distinguishes the two via JsonElement
+    // inspection.
+    public async Task<InventoryRow> PatchInventoryAsync(
+        string id, IReadOnlyDictionary<string, object?> patch, CancellationToken ct = default)
+    {
+        using var res = await _http.PatchAsJsonAsync(
+            $"api/v1/inventory/{Uri.EscapeDataString(id)}", patch, Json, ct);
+        await ThrowIfProblem(res, ct);
+        return (await res.Content.ReadFromJsonAsync<InventoryRow>(Json, ct))!;
+    }
+
+    public async Task DeleteInventoryAsync(string id, CancellationToken ct = default)
+    {
+        using var res = await _http.DeleteAsync($"api/v1/inventory/{Uri.EscapeDataString(id)}", ct);
+        await ThrowIfProblem(res, ct);
+    }
+
     // ---- Saved views ----------------------------------------------------
 
     public async Task<SavedViewList> ListSavedViewsAsync(CancellationToken ct = default)
@@ -123,6 +143,13 @@ public sealed class BruinApiClient
         using var res = await _http.GetAsync($"api/v1/bulk-jobs/{Uri.EscapeDataString(id)}", ct);
         await ThrowIfProblem(res, ct);
         return (await res.Content.ReadFromJsonAsync<BulkJobStatus>(Json, ct))!;
+    }
+
+    public async Task<MeResponse> GetMeAsync(CancellationToken ct = default)
+    {
+        using var res = await _http.GetAsync("api/v1/me", ct);
+        await ThrowIfProblem(res, ct);
+        return (await res.Content.ReadFromJsonAsync<MeResponse>(Json, ct))!;
     }
 
     public async Task<BulkJobErrorsResponse> GetBulkJobErrorsAsync(string id, CancellationToken ct = default)

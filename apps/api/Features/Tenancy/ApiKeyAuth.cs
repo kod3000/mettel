@@ -7,35 +7,34 @@ using Npgsql;
 
 namespace Bruin.Api.Features.Tenancy;
 
-// Simple X-Api-Key → client mapping. The exercise says header auth is fine,
-// so no real IdP; the trade-off is documented in the design doc.
-// Cache is process-local and refreshed lazily on cache miss — with 3 seeded
-// clients it doesn't matter, but the interface won't need to change if that
-// grows into hundreds.
+// X-Api-Key → (client, role) mapping. Reads from api_key (post-A1
+// migration); falls back to client.api_key (legacy shape) if the key is
+// missing there — the backfill should mean it never is, but the belt is
+// cheap. Cache is process-local, keyed by raw API key.
+public sealed record ResolvedKey(Guid ClientId, string Role);
+
 public interface IApiKeyResolver
 {
-    Task<Guid?> ResolveAsync(string apiKey, CancellationToken ct);
+    Task<ResolvedKey?> ResolveAsync(string apiKey, CancellationToken ct);
 }
 
 public sealed class ApiKeyResolver(IDbConnections db) : IApiKeyResolver
 {
-    private static readonly ConcurrentDictionary<string, Guid> _cache = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, ResolvedKey> _cache = new(StringComparer.Ordinal);
 
-    public async Task<Guid?> ResolveAsync(string apiKey, CancellationToken ct)
+    public async Task<ResolvedKey?> ResolveAsync(string apiKey, CancellationToken ct)
     {
         if (_cache.TryGetValue(apiKey, out var cached)) return cached;
 
-        // Client rows are effectively write-once (seeded); the process-local
-        // cache above absorbs the load. Try replica first so cold-start
-        // auth traffic doesn't burden the primary; fall back to primary
-        // on any replica failure (paused replica must NOT block auth —
-        // this is the /health/ready → 503 window from ADR-0003).
-        var id = await TryLookup(await OpenAsync(preferReplica: true, ct), apiKey, ct);
-        id ??= await TryLookup(await OpenAsync(preferReplica: false, ct), apiKey, ct);
-        if (id is Guid g && g != Guid.Empty)
+        // Try replica first so cold-start auth traffic doesn't burden the
+        // primary; fall back to primary on any replica failure (paused
+        // replica must NOT block auth — see ADR-0003).
+        var hit = await TryLookup(await OpenAsync(preferReplica: true, ct), apiKey, ct);
+        hit ??= await TryLookup(await OpenAsync(preferReplica: false, ct), apiKey, ct);
+        if (hit is not null)
         {
-            _cache[apiKey] = g;
-            return g;
+            _cache[apiKey] = hit;
+            return hit;
         }
         return null;
     }
@@ -49,13 +48,24 @@ public sealed class ApiKeyResolver(IDbConnections db) : IApiKeyResolver
                                 || ex is System.IO.IOException) { return null; }
     }
 
-    private static async Task<Guid?> TryLookup(NpgsqlConnection? conn, string apiKey, CancellationToken ct)
+    private static async Task<ResolvedKey?> TryLookup(NpgsqlConnection? conn, string apiKey, CancellationToken ct)
     {
         if (conn is null) return null;
         try
         {
-            return await conn.QuerySingleOrDefaultAsync<Guid?>(new CommandDefinition(
-                "SELECT id FROM public.client WHERE api_key = @k LIMIT 1",
+            // Primary source: api_key (new table). LEFT JOIN'd against
+            // client.api_key so we still resolve keys that somehow slipped
+            // the A1 backfill (shouldn't happen — belt for the braces).
+            return await conn.QuerySingleOrDefaultAsync<ResolvedKey?>(new CommandDefinition(@"
+                SELECT client_id AS ClientId, role AS Role
+                FROM public.api_key
+                WHERE key = @k
+                UNION ALL
+                SELECT id AS ClientId, 'admin' AS Role
+                FROM public.client
+                WHERE api_key = @k
+                  AND NOT EXISTS (SELECT 1 FROM public.api_key WHERE key = @k)
+                LIMIT 1",
                 new { k = apiKey }, cancellationToken: ct));
         }
         catch (Exception ex) when (ex is NpgsqlException
@@ -86,15 +96,15 @@ public sealed class ApiKeyMiddleware(RequestDelegate next)
             return;
         }
 
-        var clientId = await resolver.ResolveAsync(raw.ToString(), ctx.RequestAborted);
-        if (clientId is null)
+        var resolved = await resolver.ResolveAsync(raw.ToString(), ctx.RequestAborted);
+        if (resolved is null)
         {
             // Deliberately vague — do not leak whether a given key existed.
             await WriteUnauthorized(ctx, "Unknown or invalid API key.");
             return;
         }
 
-        tenant.Set(clientId.Value);
+        tenant.Set(resolved.ClientId, resolved.Role);
         await next(ctx);
     }
 

@@ -51,7 +51,10 @@ public sealed class ListHandler(IReadRouter db, CursorCodec cursors, TenantRowEs
         // CTE on the search path). Keeping them separate lets us compose the
         // right SQL for each branch without string surgery.
         var whereStruct = new StringBuilder();
-        whereStruct.Append("client_id = @clientId");
+        // Soft-deleted rows are invisible on all read paths — they still
+        // exist for audit, and a partial unique index (see AddInventorySoftDelete
+        // migration) lets the same service_number be re-inserted after delete.
+        whereStruct.Append("client_id = @clientId AND deleted_at IS NULL");
 
         if (q.Statuses.Count > 0)
         {

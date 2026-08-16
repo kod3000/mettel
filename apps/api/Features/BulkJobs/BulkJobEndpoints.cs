@@ -3,6 +3,7 @@ using System.Text;
 using Bruin.Api.Data;
 using Bruin.Api.Domain;
 using Bruin.Api.Errors;
+using Bruin.Api.Features.Tenancy;
 using Dapper;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -30,9 +31,10 @@ public static class BulkJobEndpoints
 
         r.MapPost("/api/v1/bulk-jobs", (HttpContext ctx, ITenantContext t, IDbConnections db,
             ILsnContext lsn, CancellationToken ct) => AcceptUploadAsync(ctx, t, db, lsn, uploadDir, ct))
+            .RequireRole(Roles.Admin, Roles.Worker)
             .Accepts<IFormFile>("multipart/form-data")
             .Produces<Contracts.BulkJobAccepted>(StatusCodes.Status202Accepted)
-            .ProducesProblem(400).ProducesProblem(413).ProducesProblem(415);
+            .ProducesProblem(400).ProducesProblem(403).ProducesProblem(413).ProducesProblem(415);
 
         r.MapGet("/api/v1/bulk-jobs/{id:guid}", GetStatusAsync)
             .Produces<Contracts.BulkJobStatus>()

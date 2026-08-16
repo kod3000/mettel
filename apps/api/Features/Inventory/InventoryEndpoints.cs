@@ -1,5 +1,6 @@
 using Bruin.Api.Domain;
 using Bruin.Api.Errors;
+using Bruin.Api.Features.Tenancy;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 
@@ -17,14 +18,30 @@ public static class InventoryEndpoints
             .Produces<Contracts.InventoryRow>()
             .ProducesProblem(404);
         r.MapPost("/api/v1/inventory", CreateInventoryAsync)
+            .RequireRole(Roles.Admin, Roles.Worker)
             .Produces<Contracts.InventoryRow>(StatusCodes.Status201Created)
             .ProducesProblem(400)
+            .ProducesProblem(403)
             .ProducesProblem(409);
         r.MapPatch("/api/v1/inventory/{id:guid}/status", PatchStatusAsync)
+            .RequireRole(Roles.Admin, Roles.Worker)
             .Produces<Contracts.StatusChangeResponse>()
             .ProducesProblem(400)
+            .ProducesProblem(403)
             .ProducesProblem(404)
             .ProducesProblem(409);
+        r.MapPatch("/api/v1/inventory/{id:guid}", PatchInventoryAsync)
+            .RequireRole(Roles.Admin, Roles.Worker)
+            .Produces<Contracts.InventoryRow>()
+            .ProducesProblem(400)
+            .ProducesProblem(403)
+            .ProducesProblem(404)
+            .ProducesProblem(409);
+        r.MapDelete("/api/v1/inventory/{id:guid}", DeleteInventoryAsync)
+            .RequireRole(Roles.Admin)
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(403)
+            .ProducesProblem(404);
     }
 
     private static Task<IResult> GetInventoryAsync(
@@ -46,6 +63,24 @@ public static class InventoryEndpoints
     {
         if (tenant.ClientId is not Guid clientId) return Task.FromResult(Problem.Unauthorized());
         return h.UpdateStatusAsync(clientId, id, body, ct);
+    }
+
+    private static async Task<IResult> PatchInventoryAsync(
+        Guid id, HttpContext ctx, ITenantContext tenant, WriteHandler h, CancellationToken ct)
+    {
+        if (tenant.ClientId is not Guid clientId) return Problem.Unauthorized();
+        if (tenant.Role is not string role)       return Problem.Unauthorized();
+        // Read the body as JsonElement so the handler can distinguish
+        // absent fields from explicit-null (clear).
+        using var doc = await System.Text.Json.JsonDocument.ParseAsync(ctx.Request.Body, cancellationToken: ct);
+        return await h.UpdateAsync(clientId, id, doc.RootElement, role, ct);
+    }
+
+    private static Task<IResult> DeleteInventoryAsync(
+        Guid id, ITenantContext tenant, WriteHandler h, CancellationToken ct)
+    {
+        if (tenant.ClientId is not Guid clientId) return Task.FromResult(Problem.Unauthorized());
+        return h.DeleteAsync(clientId, id, ct);
     }
 
     // Endpoint stays thin — parsing + validation → handler → response.

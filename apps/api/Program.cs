@@ -149,6 +149,7 @@ app.MapGet("/metrics", (Metrics m) => Results.Text(m.RenderPrometheus(), "text/p
 app.MapOpenApi("/openapi/{documentName}.json");
 
 app.MapInventory();
+Bruin.Api.Features.Tenancy.MeEndpoint.MapMe(app);
 Bruin.Api.Features.SavedViews.SavedViewEndpoints.MapSavedViews(app);
 
 // Bulk-job endpoints. Upload directory is shared with the worker via a

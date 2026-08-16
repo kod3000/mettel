@@ -1,4 +1,5 @@
 @inject BruinApiClient Api
+@inject MeService Me
 @implements IDisposable
 
 @* Persistent named filter presets — GET /api/v1/saved-views on mount,
@@ -27,20 +28,26 @@
         {
             <span class="saved-chip">
                 <button type="button" class="saved-name" @onclick="() => Apply(v)">@v.Name</button>
-                <button type="button" class="saved-del" @onclick="() => DeleteAsync(v)" title="Delete">×</button>
+                @if (Me.CanWrite)
+                {
+                    <button type="button" class="saved-del" @onclick="() => DeleteAsync(v)" title="Delete">×</button>
+                }
             </span>
         }
     }
 
     <div style="flex:1"></div>
 
-    <input type="text" class="input" style="width:220px;height:26px;font-size:11px"
-           placeholder="Save current filters as…"
-           value="@_name"
-           @oninput="OnNameInput" />
-    <button type="button" class="btn" style="font-size:11px;padding:2px 10px;background:var(--slate-800);color:white;border-color:var(--slate-800)"
-            disabled="@(_saving || string.IsNullOrWhiteSpace(_name))"
-            @onclick="SaveAsync">Save</button>
+    @if (Me.CanWrite)
+    {
+        <input type="text" class="input" style="width:220px;height:26px;font-size:11px"
+               placeholder="Save current filters as…"
+               value="@_name"
+               @oninput="OnNameInput" />
+        <button type="button" class="btn" style="font-size:11px;padding:2px 10px;background:var(--slate-800);color:white;border-color:var(--slate-800)"
+                disabled="@(_saving || string.IsNullOrWhiteSpace(_name))"
+                @onclick="SaveAsync">Save</button>
+    }
 </div>
 
 <style>

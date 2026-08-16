@@ -1,17 +1,45 @@
 @inject TenantContext Tenant
 
-<select class="select" @onchange="OnPick" value="@Tenant.Current.Id" aria-label="Client">
-    @foreach (var t in Models.Tenant.All)
-    {
-        <option value="@t.Id">@t.Label</option>
-    }
-</select>
+<div class="picker-group">
+    <label class="picker-label">
+        <span>Client</span>
+        <select class="select" @onchange="OnPickTenant" value="@Tenant.Current.Id" aria-label="Client">
+            @foreach (var t in Models.Tenant.All)
+            {
+                <option value="@t.Id">@t.Label</option>
+            }
+        </select>
+    </label>
+    <label class="picker-label"
+           title="Switch role — reader can only view, worker can insert/update, admin can also delete">
+        <span>Role</span>
+        <select class="select role-@Tenant.CurrentRole.ToString().ToLowerInvariant()"
+                @onchange="OnPickRole" value="@Tenant.CurrentRole.ToWire()" aria-label="Role">
+            <option value="admin">admin</option>
+            <option value="worker">worker</option>
+            <option value="reader">reader</option>
+        </select>
+    </label>
+</div>
+
+<style>
+    .picker-group { display: flex; gap: 12px; align-items: center; }
+    .picker-label { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--slate-600); }
+    .role-admin  { border-color: #a5b4fc; background: #eef2ff; color: #3730a3; }
+    .role-worker { border-color: #7dd3fc; background: #f0f9ff; color: #075985; }
+    .role-reader { border-color: var(--slate-300); background: var(--slate-100); color: var(--slate-600); }
+</style>
 
 @code {
-    private void OnPick(ChangeEventArgs e)
+    private void OnPickTenant(ChangeEventArgs e)
     {
         var id = e.Value?.ToString();
         var next = Models.Tenant.All.FirstOrDefault(x => x.Id == id);
         if (next is not null) Tenant.Set(next);
+    }
+
+    private void OnPickRole(ChangeEventArgs e)
+    {
+        Tenant.SetRole(RoleExtensions.FromWire(e.Value?.ToString()));
     }
 }

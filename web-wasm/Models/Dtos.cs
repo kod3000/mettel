@@ -88,6 +88,12 @@ public sealed record SavedViewUpsert(
     [property: JsonPropertyName("sort")]    string? Sort = null,
     [property: JsonPropertyName("columns")] string? Columns = null);
 
+// GET /api/v1/me — fetched once per (tenant, role) change to gate write UI.
+public sealed record MeResponse(
+    [property: JsonPropertyName("clientId")]       string ClientId,
+    [property: JsonPropertyName("role")]           string Role,
+    [property: JsonPropertyName("adminOnlyFields")] IReadOnlyList<string> AdminOnlyFields);
+
 public sealed record BulkJobAccepted(
     [property: JsonPropertyName("jobId")]  string JobId,
     [property: JsonPropertyName("status")] string Status);

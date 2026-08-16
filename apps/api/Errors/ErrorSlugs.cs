@@ -18,6 +18,7 @@ public static class ErrorSlugs
     public const string UnsupportedMediaType     = "unsupported-media-type";
     public const string PayloadTooLarge          = "payload-too-large";
     public const string Unauthorized             = "unauthorized";
+    public const string Forbidden                = "forbidden";
 
     public static string TypeUri(string slug) => $"{TypeBase}/{slug}";
 }

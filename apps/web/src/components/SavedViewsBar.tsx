@@ -7,11 +7,14 @@ import type { ListParams } from "../api/inventory.js";
 interface Props {
     params: ListParams;
     onApply: (next: ListParams) => void;
+    // Reader keys 403 on POST/PUT/DELETE saved-views; hide the Save input +
+    // per-view delete × so read-only tenants can still apply an existing view.
+    canWrite: boolean;
 }
 
 const CACHE_KEY = "bruin.lastSavedViewId";
 
-export function SavedViewsBar({ params, onApply }: Props) {
+export function SavedViewsBar({ params, onApply, canWrite }: Props) {
     const client = useApi();
     const qc = useQueryClient();
     const [name, setName] = useState("");
@@ -67,35 +70,41 @@ export function SavedViewsBar({ params, onApply }: Props) {
                     >
                         {v.name}
                     </button>
-                    <button
-                        type="button"
-                        onClick={() => del.mutate(v.id!)}
-                        title="Delete"
-                        className="text-slate-400 hover:text-rose-500"
-                    >
-                        ×
-                    </button>
+                    {canWrite && (
+                        <button
+                            type="button"
+                            onClick={() => del.mutate(v.id!)}
+                            title="Delete"
+                            className="text-slate-400 hover:text-rose-500"
+                        >
+                            ×
+                        </button>
+                    )}
                 </span>
             ))}
             {list.data && list.data.views.length === 0 && (
                 <span className="text-slate-400 italic">none yet</span>
             )}
             <div className="flex-1" />
-            <input
-                type="text"
-                placeholder="Save current filters as…"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-52 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-            <button
-                type="button"
-                disabled={!name.trim() || create.isPending}
-                onClick={() => create.mutate()}
-                className="rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-white shadow-sm hover:bg-slate-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
-            >
-                Save
-            </button>
+            {canWrite && (
+                <>
+                    <input
+                        type="text"
+                        placeholder="Save current filters as…"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        className="w-52 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                    <button
+                        type="button"
+                        disabled={!name.trim() || create.isPending}
+                        onClick={() => create.mutate()}
+                        className="rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-white shadow-sm hover:bg-slate-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
+                    >
+                        Save
+                    </button>
+                </>
+            )}
         </div>
     );
 }

@@ -1,14 +1,20 @@
 @inject BruinApiClient Api
+@inject MeService Me
+@inject ToastService Toasts
 @implements IDisposable
 
-@* Right-side drawer: full row + status PATCH. Mirrors the React
+@* Right-side drawer: view + edit + soft-delete. Mirrors the React
    RowDetailDrawer.tsx behavior:
      - rowVersion from the detail read is echoed on PATCH; 409
        concurrency-conflict triggers a refetch.
      - 5xx errors enter an auto-recovery state with backoff retries;
        4xx errors are terminal.
      - Backdrop click + Esc close the drawer when idle.
-     - X-Write-LSN capture is handled up-stack by ApiKeyHandler. *@
+     - X-Write-LSN capture is handled up-stack by ApiKeyHandler.
+     - Edit mode toggles into inline inputs; ProblemDetails.errors
+       lands as per-field validation messages under each input.
+     - Delete row (admin-only) → confirm modal → soft-delete → close
+       drawer + toast. *@
 
 <div class="drawer-backdrop" @onclick="OnBackdrop">
     <aside class="drawer" role="dialog" aria-label="Inventory detail" @onclick:stopPropagation="true">
@@ -43,8 +49,78 @@
                     @if (_terminalErr.Problem.Detail is not null) { <div>@_terminalErr.Problem.Detail</div> }
                 </div>
             }
+            else if (_row is not null && _editing)
+            {
+                <div class="edit-form">
+                    <EditField Label="Service #" Name="serviceNumber" Required="true"
+                               Value="@_draft["serviceNumber"]"
+                               ValueChanged="@(v => SetField(\"serviceNumber\", v))"
+                               ReadOnly="@IsReadOnly(\"serviceNumber\")"
+                               Errors="@FieldErrs(\"serviceNumber\")" />
+                    <EditField Label="Product name" Name="productName" Required="true"
+                               Value="@_draft["productName"]"
+                               ValueChanged="@(v => SetField(\"productName\", v))"
+                               ReadOnly="@IsReadOnly(\"productName\")"
+                               Errors="@FieldErrs(\"productName\")" />
+                    <div class="edit-block">
+                        <label>
+                            Category
+                            @if (IsReadOnly("productCategory")) { <span class="ro-hint">(admin only)</span> }
+                        </label>
+                        <select disabled="@(IsReadOnly(\"productCategory\") || _pending)"
+                                value="@_draft["productCategory"]"
+                                @onchange="e => SetField(\"productCategory\", e.Value?.ToString() ?? \"\")">
+                            @foreach (var c in new[] { "voice", "data", "wireless", "other" })
+                            {
+                                <option value="@c">@c</option>
+                            }
+                        </select>
+                        @foreach (var m in FieldErrs("productCategory")) { <div class="ferr">@m</div> }
+                    </div>
+                    <EditField Label="City" Name="city"
+                               Value="@_draft["city"]"
+                               ValueChanged="@(v => SetField(\"city\", v))"
+                               ReadOnly="@IsReadOnly(\"city\")"
+                               Errors="@FieldErrs(\"city\")" />
+                    <EditField Label="State" Name="state"
+                               Value="@_draft["state"]"
+                               ValueChanged="@(v => SetField(\"state\", v))"
+                               ReadOnly="@IsReadOnly(\"state\")"
+                               Errors="@FieldErrs(\"state\")" />
+                    <EditField Label="Address" Name="address"
+                               Value="@_draft["address"]"
+                               ValueChanged="@(v => SetField(\"address\", v))"
+                               ReadOnly="@IsReadOnly(\"address\")"
+                               Errors="@FieldErrs(\"address\")" />
+                    <EditField Label="Assignee" Name="assignee"
+                               Value="@_draft["assignee"]"
+                               ValueChanged="@(v => SetField(\"assignee\", v))"
+                               ReadOnly="@IsReadOnly(\"assignee\")"
+                               Errors="@FieldErrs(\"assignee\")" />
+                    <div class="edit-block">
+                        <label>Notes</label>
+                        <textarea rows="3"
+                                  disabled="@(IsReadOnly(\"notes\") || _pending)"
+                                  value="@_draft["notes"]"
+                                  @oninput="e => SetField(\"notes\", e.Value?.ToString() ?? \"\")"></textarea>
+                        @foreach (var m in FieldErrs("notes")) { <div class="ferr">@m</div> }
+                    </div>
+                    <div style="font-size:11px;color:var(--slate-500)">
+                        Editing row version <span class="mono">@_row.RowVersion</span>. A concurrent update will 409 and reload the drawer.
+                    </div>
+                    <div style="display:flex;gap:8px;margin-top:4px">
+                        <button class="btn primary" disabled="@_pending" @onclick="SaveEditAsync">
+                            @(_pending ? "Saving…" : "Save")
+                        </button>
+                        <button class="btn" disabled="@_pending" @onclick="CancelEdit">Cancel</button>
+                    </div>
+                </div>
+            }
             else if (_row is not null)
             {
+                <Field Label="Service #">
+                    <div class="mono">@_row.ServiceNumber</div>
+                </Field>
                 <Field Label="Product">
                     <div>@_row.ProductName</div>
                     <div class="eyebrow" style="margin-top:2px">@_row.ProductCategory</div>
@@ -76,48 +152,112 @@
                     </div>
                 </Field>
 
-                <div class="drawer-actions">
-                    <div class="eyebrow" style="margin-bottom:8px">Change status</div>
-                    @{
-                        var nexts = NextStatuses(_row.Status);
-                    }
-                    @if (nexts.Length == 0)
-                    {
-                        <div style="font-size:12px;color:var(--slate-500);font-style:italic">
-                            Terminal state — no further transitions allowed.
-                        </div>
-                    }
-                    else
-                    {
-                        <div style="display:flex;flex-wrap:wrap;gap:8px">
-                            @foreach (var s in nexts)
-                            {
-                                <button
-                                    class="btn @BtnKind(s)"
-                                    disabled="@_pending"
-                                    @onclick="() => PatchAsync(s)">
-                                    @(_pending && _pendingTarget == s ? "Working…" : $"→ {s}")
-                                </button>
-                            }
-                        </div>
-                    }
+                @if (Me.CanWrite)
+                {
+                    <div class="drawer-row-actions">
+                        <button class="btn" @onclick="StartEdit">Edit fields</button>
+                        @if (Me.CanDelete)
+                        {
+                            <button class="btn danger" disabled="@_pending" @onclick="() => _confirmDelete = true">
+                                Delete row
+                            </button>
+                        }
+                    </div>
+                    <div class="drawer-actions">
+                        <div class="eyebrow" style="margin-bottom:8px">Change status</div>
+                        @{
+                            var nexts = NextStatuses(_row.Status);
+                        }
+                        @if (nexts.Length == 0)
+                        {
+                            <div style="font-size:12px;color:var(--slate-500);font-style:italic">
+                                Terminal state — no further transitions allowed.
+                            </div>
+                        }
+                        else
+                        {
+                            <div style="display:flex;flex-wrap:wrap;gap:8px">
+                                @foreach (var s in nexts)
+                                {
+                                    <button
+                                        class="btn @BtnKind(s)"
+                                        disabled="@_pending"
+                                        @onclick="() => PatchStatusAsync(s)">
+                                        @(_pending && _pendingTarget == s ? "Working…" : $"→ {s}")
+                                    </button>
+                                }
+                            </div>
+                        }
 
-                    @if (_terminalErr is not null && _row is not null)
-                    {
-                        <div class="err-box" style="margin-top:12px">
-                            <strong>@MutationTitle(_terminalErr)</strong>
-                            <div style="margin-top:2px">@(_terminalErr.Problem.Detail ?? _terminalErr.Problem.Title ?? "Request failed.")</div>
-                            @if (_terminalErr.IsSlug("concurrency-conflict"))
-                            {
-                                <div style="margin-top:2px;font-size:11px">Row was refreshed — try again.</div>
-                            }
-                        </div>
-                    }
-                </div>
+                        @if (_terminalErr is not null && _row is not null)
+                        {
+                            <div class="err-box" style="margin-top:12px">
+                                <strong>@MutationTitle(_terminalErr)</strong>
+                                <div style="margin-top:2px">@(_terminalErr.Problem.Detail ?? _terminalErr.Problem.Title ?? "Request failed.")</div>
+                                @if (_terminalErr.IsSlug("concurrency-conflict"))
+                                {
+                                    <div style="margin-top:2px;font-size:11px">Row was refreshed — try again.</div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
             }
         </div>
     </aside>
 </div>
+
+@if (_confirmDelete && _row is not null)
+{
+    <div class="modal-backdrop" @onclick="() => _confirmDelete = false">
+        <div class="modal" role="alertdialog" @onclick:stopPropagation="true">
+            <div style="font-weight:600">Delete inventory row?</div>
+            <div style="margin-top:4px;font-size:12px;color:var(--slate-600)">
+                <span class="mono">@_row.ServiceNumber</span> — @_row.ProductName
+            </div>
+            <div style="margin-top:6px;font-size:12px;color:var(--slate-500)">
+                Soft delete: the row is hidden from lists but kept for audit. You can re-create
+                the same service number afterwards.
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+                <button class="btn" disabled="@_pending" @onclick="() => _confirmDelete = false">Cancel</button>
+                <button class="btn danger" disabled="@_pending" @onclick="DeleteAsync">
+                    @(_pending ? "Deleting…" : "Delete")
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .edit-form { display: flex; flex-direction: column; gap: 10px; }
+    .edit-block label { display: block; font-size: 11px; text-transform: uppercase;
+        letter-spacing: 0.04em; color: var(--slate-500); margin-bottom: 4px; }
+    .edit-block select, .edit-block textarea {
+        width: 100%; padding: 4px 8px; font-size: 13px;
+        border: 1px solid var(--slate-300); border-radius: 6px; background: white;
+    }
+    .edit-block select:disabled, .edit-block textarea:disabled {
+        background: var(--slate-100); color: var(--slate-500);
+    }
+    .ro-hint { margin-left: 4px; font-style: italic; color: var(--slate-400); text-transform: none; }
+    .ferr { margin-top: 4px; font-size: 11px; color: #be123c; }
+    .drawer-row-actions { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--slate-200);
+        display: flex; flex-wrap: wrap; gap: 8px; }
+    .btn.danger {
+        background: white; border-color: #fda4af; color: #be123c;
+    }
+    .btn.danger:hover:not(:disabled) { background: var(--rose-50); }
+    .modal-backdrop {
+        position: fixed; inset: 0; z-index: 40; background: rgb(15 23 42 / 0.4);
+        display: flex; align-items: center; justify-content: center; padding: 16px;
+    }
+    .modal {
+        background: white; border-radius: 8px; border: 1px solid var(--slate-200);
+        box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.2), 0 8px 10px -6px rgb(0 0 0 / 0.15);
+        padding: 16px; max-width: 400px; width: 100%; font-size: 13px;
+    }
+</style>
 
 @code {
     [Parameter, EditorRequired] public string Id { get; set; } = default!;
@@ -134,6 +274,16 @@
     private bool _recovering;
     private int _attempt;
     private CancellationTokenSource? _cts;
+
+    private bool _editing;
+    private bool _confirmDelete;
+    private Dictionary<string, string> _draft = new(StringComparer.Ordinal);
+    private Dictionary<string, string[]> _fieldErrors = new(StringComparer.Ordinal);
+
+    private static readonly string[] Writable = {
+        "serviceNumber", "productName", "productCategory",
+        "city", "state", "address", "assignee", "notes",
+    };
 
     protected override async Task OnParametersSetAsync()
     {
@@ -162,7 +312,143 @@
         }
     }
 
-    private async Task PatchAsync(string status)
+    private void StartEdit()
+    {
+        if (_row is null) return;
+        _draft = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["serviceNumber"]   = _row.ServiceNumber ?? "",
+            ["productName"]     = _row.ProductName ?? "",
+            ["productCategory"] = _row.ProductCategory ?? "",
+            ["city"]            = _row.City ?? "",
+            ["state"]           = _row.State ?? "",
+            ["address"]         = _row.Address ?? "",
+            ["assignee"]        = _row.Assignee ?? "",
+            ["notes"]           = _row.Notes ?? "",
+        };
+        _fieldErrors.Clear();
+        _terminalErr = null;
+        _editing = true;
+    }
+
+    private void CancelEdit()
+    {
+        _editing = false;
+        _draft.Clear();
+        _fieldErrors.Clear();
+    }
+
+    private void SetField(string name, string value)
+    {
+        _draft[name] = value;
+        _fieldErrors.Remove(name);
+    }
+
+    private bool IsReadOnly(string name)
+    {
+        var admin = Me.Current?.AdminOnlyFields;
+        return admin is not null && admin.Contains(name) && Me.EffectiveRole != Role.Admin;
+    }
+
+    private string[] FieldErrs(string name) =>
+        _fieldErrors.TryGetValue(name, out var arr) ? arr : Array.Empty<string>();
+
+    private async Task SaveEditAsync()
+    {
+        if (_row is null || _pending) return;
+
+        // Diff against the current row — only send changed fields.
+        var patch = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["rowVersion"] = _row.RowVersion,
+        };
+        foreach (var name in Writable)
+        {
+            var current = name switch
+            {
+                "serviceNumber"   => _row.ServiceNumber ?? "",
+                "productName"     => _row.ProductName ?? "",
+                "productCategory" => _row.ProductCategory ?? "",
+                "city"            => _row.City ?? "",
+                "state"           => _row.State ?? "",
+                "address"         => _row.Address ?? "",
+                "assignee"        => _row.Assignee ?? "",
+                "notes"           => _row.Notes ?? "",
+                _ => "",
+            };
+            var draftVal = _draft.TryGetValue(name, out var v) ? v : current;
+            if (draftVal == current) continue;
+            // Empty string on an optional field = clear (null); the server
+            // returns per-field validation for a required field cleared.
+            var isOptional = name is "city" or "state" or "address" or "assignee" or "notes";
+            patch[name] = draftVal.Length == 0 && isOptional ? null : draftVal;
+        }
+        if (patch.Count == 1) { CancelEdit(); return; } // rowVersion only — nothing changed
+
+        _pending = true;
+        _terminalErr = null;
+        StateHasChanged();
+
+        try
+        {
+            var ct = _cts?.Token ?? CancellationToken.None;
+            _row = await Api.PatchInventoryAsync(Id, patch, ct);
+            _editing = false;
+            _draft.Clear();
+            _fieldErrors.Clear();
+        }
+        catch (ApiException ex)
+        {
+            if (ex.Problem.Errors is not null)
+            {
+                _fieldErrors = new Dictionary<string, string[]>(ex.Problem.Errors, StringComparer.Ordinal);
+            }
+            if (ex.IsSlug("concurrency-conflict"))
+            {
+                try { _row = await Api.GetAsync(Id, _cts?.Token ?? CancellationToken.None); }
+                catch { /* ignore refetch fail */ }
+                Toasts.Error("Row changed while editing — reloaded.");
+            }
+            else if (ex.Problem.Errors is null)
+            {
+                Toasts.Error(ex.Problem.Detail ?? ex.Problem.Title ?? "Save failed");
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _pending = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_row is null || _pending) return;
+        _pending = true;
+        _confirmDelete = false;
+        StateHasChanged();
+
+        try
+        {
+            var ct = _cts?.Token ?? CancellationToken.None;
+            await Api.DeleteInventoryAsync(Id, ct);
+            Toasts.Info("Row deleted.");
+            await OnClose();
+        }
+        catch (ApiException ex)
+        {
+            Toasts.Error(ex.Problem.Detail ?? ex.Problem.Title ?? "Delete failed");
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _pending = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task PatchStatusAsync(string status)
     {
         if (_row is null || _pending) return;
         _pending = true;
@@ -175,15 +461,11 @@
             var ct = _cts?.Token ?? CancellationToken.None;
             var body = new StatusPatch(status, _row.RowVersion);
             var res = await RetryAsync(t => Api.PatchStatusAsync(Id, body, t), ct);
-            // Refetch row for the fresh rowVersion + updatedAt. LSN echo
-            // already updated the client watermark via the handler.
             _row = await Api.GetAsync(Id, ct);
         }
         catch (ApiException ex)
         {
             _terminalErr = ex;
-            // A stale rowVersion means our snapshot is out of date; pull
-            // the latest so the operator can decide again.
             if (ex.IsSlug("concurrency-conflict"))
             {
                 try { _row = await Api.GetAsync(Id, _cts?.Token ?? CancellationToken.None); }
@@ -199,8 +481,6 @@
         }
     }
 
-    // Retry only 5xx and network faults. 4xx are terminal (validation,
-    // conflict, not-found) — no point looping.
     private async Task<T> RetryAsync<T>(Func<CancellationToken, Task<T>> op, CancellationToken ct)
     {
         _attempt = 0;
@@ -230,7 +510,7 @@
         }
     }
 
-    private void OnBackdrop() { if (!_pending) _ = OnClose(); }
+    private void OnBackdrop() { if (!_pending && !_editing) _ = OnClose(); }
 
     private Task OnClose() => OnClosed.InvokeAsync();
 
@@ -255,6 +535,7 @@
         "not-found"                 => "Row no longer exists",
         "validation-failed"         => "Validation failed",
         "unauthorized"              => "Not authorized",
+        "forbidden"                 => "Forbidden",
         _                           => e.StatusCode >= 500 ? "Server error" : "Request failed",
     };
 

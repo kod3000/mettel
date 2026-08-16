@@ -55,6 +55,8 @@ function fakeClient(program: Map<string, FakeSlot>, calls: { q: string; aborted:
         get: (p, o) => request(p, o),
         post: (p, b, o) => request(p, { ...o, method: "POST", body: b } as unknown as Parameters<typeof request>[1]),
         patch: (p, b, o) => request(p, { ...o, method: "PATCH", body: b } as unknown as Parameters<typeof request>[1]),
+        del: (p, o) => request(p, { ...o, method: "DELETE" } as unknown as Parameters<typeof request>[1]),
+        apiKey: "test-key",
     };
 }
 
