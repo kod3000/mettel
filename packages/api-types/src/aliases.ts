@@ -23,7 +23,8 @@ export type ProblemSlug =
     | "not-found"
     | "unsupported-media-type"
     | "payload-too-large"
-    | "unauthorized";
+    | "unauthorized"
+    | "forbidden";
 
 // Alias over the generated ProblemDetails so callers get one type name and
 // codegen owns the field shape. `errors` (the per-field map on validation

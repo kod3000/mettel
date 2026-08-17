@@ -22,6 +22,7 @@ public static class LsnEndpoint
     {
         r.MapGet("/api/v1/debug/lsn", GetLsnAsync)
             .WithName("GetDebugLsn")
+            .Produces<DebugLsnResponse>()
             .ProducesProblem(401);
     }
 
@@ -43,9 +44,13 @@ public static class LsnEndpoint
         try
         {
             await using var replicaConn = await db.OpenReplicaAsync(ct);
+            // COALESCE the replay LSN: when the "replica" is the primary
+            // itself (single-container test setups) `pg_last_wal_replay_lsn`
+            // returns NULL; falling through to the primary WAL LSN keeps
+            // the bar and its tests honest without special-casing.
             var row = await replicaConn.QuerySingleAsync<(string? lsn, double lagSec)>(@"
                 SELECT
-                    pg_last_wal_replay_lsn()::text                                                AS lsn,
+                    COALESCE(pg_last_wal_replay_lsn()::text, pg_current_wal_lsn()::text)          AS lsn,
                     GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(
                         pg_last_xact_replay_timestamp(), now()))))::float8                        AS lagSec");
             replica = row.lsn;

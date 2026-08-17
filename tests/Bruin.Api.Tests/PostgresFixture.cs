@@ -22,6 +22,14 @@ public sealed class PostgresFixture : IAsyncLifetime
     public Guid ClientB { get; } = Guid.Parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
     public const string ApiKeyA = "test-key-a";
     public const string ApiKeyB = "test-key-b";
+    // Per-role keys for the RequireRole tests. Suffix convention mirrors
+    // the production seed in AddRolesAndFieldPolicy migration.
+    public const string ApiKeyA_Admin  = "test-key-a";           // same as legacy backfill
+    public const string ApiKeyA_Worker = "test-key-a_worker";
+    public const string ApiKeyA_Reader = "test-key-a_reader";
+    public const string ApiKeyB_Admin  = "test-key-b";
+    public const string ApiKeyB_Worker = "test-key-b_worker";
+    public const string ApiKeyB_Reader = "test-key-b_reader";
 
     public async Task InitializeAsync()
     {
@@ -59,6 +67,55 @@ public sealed class PostgresFixture : IAsyncLifetime
             cmd.Parameters.AddWithValue("k", key);
             await cmd.ExecuteNonQueryAsync();
         }
+        // Role-scoped keys per client. Migrations ran when the app booted
+        // (against an empty client table), so we need to insert these now
+        // that the clients exist. Suffix convention matches the production
+        // AddRolesAndFieldPolicy migration.
+        foreach (var (clientId, adminKey) in new[] {
+            (ClientA, ApiKeyA_Admin), (ClientB, ApiKeyB_Admin),
+        })
+        {
+            foreach (var (key, role) in new[] {
+                (adminKey,              "admin"),
+                (adminKey + "_worker",  "worker"),
+                (adminKey + "_reader",  "reader"),
+            })
+            {
+                await using var cmd = c.CreateCommand();
+                cmd.CommandText = @"INSERT INTO public.api_key (id, client_id, key, role, label)
+                                    VALUES (gen_random_uuid(), @cid, @k, @r, 'test seed')
+                                    ON CONFLICT (key) DO NOTHING";
+                cmd.Parameters.AddWithValue("cid", clientId);
+                cmd.Parameters.AddWithValue("k", key);
+                cmd.Parameters.AddWithValue("r", role);
+                await cmd.ExecuteNonQueryAsync();
+            }
+        }
+    }
+
+    // Set an admin-only lock on a field for a client. Consumed by
+    // InventoryPatchTests to verify worker enforcement. Idempotent.
+    public async Task SetAdminOnlyFieldAsync(Guid clientId, string wireFieldName)
+    {
+        await using var c = new NpgsqlConnection(ConnString);
+        await c.OpenAsync();
+        await using var cmd = c.CreateCommand();
+        cmd.CommandText = @"INSERT INTO public.field_policy (client_id, field_name, min_role)
+                            VALUES (@cid, @f, 'admin')
+                            ON CONFLICT (client_id, field_name) DO UPDATE SET min_role = 'admin'";
+        cmd.Parameters.AddWithValue("cid", clientId);
+        cmd.Parameters.AddWithValue("f", wireFieldName);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    public async Task ClearFieldPoliciesAsync(Guid clientId)
+    {
+        await using var c = new NpgsqlConnection(ConnString);
+        await c.OpenAsync();
+        await using var cmd = c.CreateCommand();
+        cmd.CommandText = "DELETE FROM public.field_policy WHERE client_id = @cid";
+        cmd.Parameters.AddWithValue("cid", clientId);
+        await cmd.ExecuteNonQueryAsync();
     }
 
     // Bulk insert n rows for a given tenant. Uses binary COPY so we can seed

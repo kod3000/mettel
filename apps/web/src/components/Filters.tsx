@@ -93,30 +93,37 @@ export function Filters({ value, onChange }: Props) {
                 className="w-72 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
 
-            {(value.q?.trim() ?? "") !== "" && (
-                <fieldset className="flex items-center gap-1.5 border-0 p-0 m-0" title="Restrict the search to specific columns. All-on uses the fast tsvector index; any deselected falls back to per-column ILIKE.">
-                    <legend className="text-xs text-slate-500 pr-1 float-none inline">Search in</legend>
-                    {SEARCH_FIELDS.map((f) => {
-                        const on = activeFields.includes(f.wire);
-                        return (
-                            <button
-                                key={f.wire}
-                                type="button"
-                                onClick={() => toggleField(f.wire)}
-                                title={f.title}
-                                data-testid={`filter-search-in-${f.wire}`}
-                                className={`rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset transition ${
-                                    on
-                                        ? "bg-sky-100 text-sky-800 ring-sky-300"
-                                        : "bg-white text-slate-400 ring-slate-200 hover:bg-slate-50 line-through"
-                                }`}
-                            >
-                                {f.label}
-                            </button>
-                        );
-                    })}
-                </fieldset>
-            )}
+            {/* Always visible so operators discover they exist. When no
+                search term is entered the chips still toggle — the fields=
+                param preapplies the moment they start typing. Muted opacity
+                signals the wait; the toggles remain interactive. */}
+            <fieldset
+                className={`flex items-center gap-1.5 border-0 p-0 m-0 transition-opacity ${
+                    (value.q?.trim() ?? "") === "" ? "opacity-60" : ""
+                }`}
+                title="Restrict the search to specific columns. All-on uses the fast tsvector index; any deselected falls back to per-column ILIKE."
+            >
+                <legend className="text-xs text-slate-500 pr-1 float-none inline">Search in</legend>
+                {SEARCH_FIELDS.map((f) => {
+                    const on = activeFields.includes(f.wire);
+                    return (
+                        <button
+                            key={f.wire}
+                            type="button"
+                            onClick={() => toggleField(f.wire)}
+                            title={f.title}
+                            data-testid={`filter-search-in-${f.wire}`}
+                            className={`rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset transition ${
+                                on
+                                    ? "bg-sky-100 text-sky-800 ring-sky-300"
+                                    : "bg-white text-slate-400 ring-slate-200 hover:bg-slate-50 line-through"
+                            }`}
+                        >
+                            {f.label}
+                        </button>
+                    );
+                })}
+            </fieldset>
 
             <FilterGroup
                 label="Status"

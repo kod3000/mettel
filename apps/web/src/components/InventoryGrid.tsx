@@ -43,9 +43,19 @@ const COLUMN_META: Array<{ id: keyof InventoryRow; label: string; width: string;
     { id: "status",          label: "Status",     width: "120px" },
     { id: "city",            label: "City",       width: "140px" },
     { id: "state",           label: "State",      width: "70px" },
+    { id: "address",         label: "Address",    width: "minmax(200px, 1.5fr)" },
     { id: "assignee",        label: "Assignee",   width: "120px" },
     { id: "createdAt",       label: "Created",    width: "170px" },
     { id: "updatedAt",       label: "Updated",    width: "170px" },
+];
+
+// Wire names of the fields the server searches when no `fields=` param is
+// sent — mirrors Filters.SEARCH_FIELDS. Used to compute "matched-in-hidden"
+// hints on rows: if the search term appears in a searchable field that
+// happens to be currently hidden in the grid, we surface it so the
+// operator understands why the row is here.
+const DEFAULT_SEARCH_FIELDS: readonly (keyof InventoryRow)[] = [
+    "productName", "serviceNumber", "city", "state", "address", "assignee", "notes",
 ];
 const PICKER_COLUMNS = COLUMN_META.map((c) => ({ id: c.id as string, label: c.label, required: c.required }));
 
@@ -61,6 +71,11 @@ const columns = [
     columnHelper.accessor("city", { header: "City" }),
     columnHelper.accessor("state", { header: "State", cell: (i) => (
         <span className="font-mono text-[12.5px]">{i.getValue() ?? ""}</span>
+    )}),
+    columnHelper.accessor("address", { header: "Address", cell: (i) => (
+        <span className="text-[12.5px] text-slate-700 truncate" title={i.getValue() ?? undefined}>
+            {i.getValue() ?? "—"}
+        </span>
     )}),
     columnHelper.accessor("assignee", { header: "Assignee", cell: (i) => (
         <span className="font-mono text-[12.5px] text-slate-600">{i.getValue() ?? "—"}</span>
@@ -135,6 +150,47 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
             onParamsChange({ ...params, sort: first.id as ListParams["sort"], dir: first.desc ? "desc" : "asc" });
         },
     });
+
+    // ---- Hidden-field match hints -----------------------------------------
+    // When the user's search term matches a row via a field that's currently
+    // hidden from the grid, surface a small chip on the row so they can see
+    // "why is this row here?". Client-side only — no server change needed
+    // because we already have the row data + the query string.
+    const queryTokens = useMemo(() => {
+        const q = (params.q ?? "").trim().toLowerCase();
+        if (q.length < 2) return [];
+        return q.split(/\s+/).filter((t) => t.length > 0);
+    }, [params.q]);
+
+    // Effective set of columns the SERVER searched: fields= if set,
+    // otherwise the default whole-tsvector list.
+    const searchedFields: readonly (keyof InventoryRow)[] = useMemo(
+        () => (params.fields && params.fields.length > 0
+            ? params.fields as (keyof InventoryRow)[]
+            : DEFAULT_SEARCH_FIELDS),
+        [params.fields]);
+
+    // …of those, the ones NOT currently visible in the grid. Notes is
+    // always here because there's no Notes column.
+    const hiddenSearched = useMemo(
+        () => searchedFields.filter((f) => visibility[f as string] === false ||
+            !COLUMN_META.some((c) => c.id === f)),
+        [searchedFields, visibility]);
+
+    // Per-row: which hidden searched fields actually contain the query.
+    // Empty array = no chip. Called per virtualized row so it needs to be
+    // O(fields×tokens) not O(all rows).
+    const hiddenMatchesFor = (row: InventoryRow): string[] => {
+        if (queryTokens.length === 0 || hiddenSearched.length === 0) return [];
+        const hits: string[] = [];
+        for (const f of hiddenSearched) {
+            const raw = row[f];
+            if (typeof raw !== "string" || raw.length === 0) continue;
+            const lower = raw.toLowerCase();
+            if (queryTokens.some((t) => lower.includes(t))) hits.push(f as string);
+        }
+        return hits;
+    };
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const virtualizer = useVirtualizer({
@@ -220,6 +276,7 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
                                 if (!row) return null;
                                 const rowData = row.original;
                                 const clickable = Boolean(onRowSelect);
+                                const hiddenHits = hiddenMatchesFor(rowData);
                                 return (
                                     <div
                                         key={row.id}
@@ -241,7 +298,7 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
                                             display: "grid",
                                             gridTemplateColumns: gridTemplate,
                                         }}
-                                        className={rowClassName(clickable, gpuHover)}
+                                        className={rowClassName(clickable, gpuHover) + " relative"}
                                     >
                                         {row.getVisibleCells().map((c) => (
                                             <div
@@ -251,6 +308,9 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
                                                 {flexRender(c.column.columnDef.cell, c.getContext())}
                                             </div>
                                         ))}
+                                        {hiddenHits.length > 0 && (
+                                            <HiddenMatchChip fields={hiddenHits} row={rowData} tokens={queryTokens} />
+                                        )}
                                     </div>
                                 );
                             })}
@@ -262,6 +322,44 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
                 </div>
             </div>
         </div>
+    );
+}
+
+// Small pill anchored at the right edge of a row that had a search hit in
+// a column the operator has hidden. Hover reveals the offending snippet so
+// they can decide whether to bring the column back or ignore. Interactive
+// only via title tooltip — no click handler because the row already
+// consumes click for opening the drawer.
+function HiddenMatchChip({
+    fields, row, tokens,
+}: {
+    fields: string[];
+    row: InventoryRow;
+    tokens: string[];
+}) {
+    // Build a compact tooltip: "notes: '…snippet…' · address: '…snippet…'"
+    const tip = fields.map((f) => {
+        const raw = (row[f as keyof InventoryRow] as string | null | undefined) ?? "";
+        const lower = raw.toLowerCase();
+        const idx = tokens
+            .map((t) => lower.indexOf(t))
+            .filter((i) => i >= 0)
+            .sort((a, b) => a - b)[0] ?? 0;
+        const start = Math.max(0, idx - 15);
+        const end = Math.min(raw.length, idx + 40);
+        const snippet = (start > 0 ? "…" : "") + raw.slice(start, end) + (end < raw.length ? "…" : "");
+        return `${f}: "${snippet}"`;
+    }).join(" · ");
+
+    return (
+        <span
+            title={tip}
+            data-testid="hidden-match-chip"
+            className="pointer-events-auto absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 ring-1 ring-amber-200 shadow-sm"
+            onClick={(e) => e.stopPropagation()}
+        >
+            matched: {fields.join(", ")}
+        </span>
     );
 }
 

@@ -25,6 +25,7 @@ public static class MeEndpoint
     {
         r.MapGet("/api/v1/me", GetMeAsync)
             .WithName("GetMe")
+            .Produces<MeResponse>()
             .ProducesProblem(401);
     }
 

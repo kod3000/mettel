@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { components } from "@bruin/api-types";
 
 // Small always-on-screen indicator strip that polls /debug/lsn every 2 s.
 // Placement: bottom-left, `position: fixed` so it survives page-level
@@ -9,13 +10,9 @@ import { useEffect, useState } from "react";
 // where primary is, here's where replica is, here's the lag" for
 // during-demo storytelling ("watch the replica catch up after a write").
 
-interface LsnData {
-    primary: string | null;
-    replica: string | null;
-    lagBytes: number;
-    lagSeconds: number;
-    reachable: boolean;
-}
+// Wire shape from OpenAPI. Fields with nullable Postgres origin come back
+// as `string | null | undefined` in the generated type — handled at render.
+type LsnData = components["schemas"]["DebugLsnResponse"];
 
 const STORAGE_KEY = "bruin.lsnBar.visible";
 const POLL_MS = 2000;

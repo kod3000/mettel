@@ -1,11 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
+import type { components } from "@bruin/api-types";
 import type { Role } from "../tenants.js";
 
-export interface MeResponse {
-    clientId: string;
-    role: Role;
-    adminOnlyFields: string[];
-}
+// Wire shape from the OpenAPI spec, retyped with the narrow Role union so
+// consumers get the union instead of the API's flat `string`. The API
+// enforces the role vocabulary via a CHECK constraint on api_key.role, so
+// widening back to `string` is safe as far as the server is concerned.
+type WireMe = components["schemas"]["MeResponse"];
+export type MeResponse = Omit<WireMe, "role"> & { role: Role };
 
 // Fetches GET /api/v1/me once per apiKey. The AppShell is remounted when
 // tenant or role changes (key={tenant:role}), so a fresh key = fresh mount
