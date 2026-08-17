@@ -255,7 +255,7 @@ function DevButton({ onOpen }: { onOpen: () => void }) {
             type="button"
             onClick={onOpen}
             title="Open developer smoke checklist"
-            className="fixed bottom-2 left-24 z-40 rounded-md border border-indigo-300 bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-800 shadow hover:bg-indigo-100"
+            className="fixed bottom-2 left-2 z-40 rounded-md border border-indigo-300 bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-800 shadow hover:bg-indigo-100"
         >
             Dev
         </button>

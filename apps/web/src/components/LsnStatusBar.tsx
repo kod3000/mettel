@@ -61,7 +61,7 @@ export function LsnStatusBar({ apiKey }: Props) {
                 type="button"
                 onClick={() => toggle(true)}
                 title="Show LSN status bar"
-                className="fixed bottom-2 left-2 z-40 rounded-md border border-slate-300 bg-white/90 px-2 py-1 text-[11px] text-slate-600 shadow hover:bg-white"
+                className="fixed bottom-2 right-2 z-40 rounded-md border border-slate-300 bg-white/90 px-2 py-1 text-[11px] text-slate-600 shadow hover:bg-white"
             >
                 LSN
             </button>
@@ -73,7 +73,7 @@ export function LsnStatusBar({ apiKey }: Props) {
             role="status"
             aria-live="off"
             data-testid="lsn-status-bar"
-            className="fixed bottom-2 left-2 z-40 flex items-center gap-3 rounded-md border border-slate-300 bg-white/95 px-3 py-1.5 text-[11px] font-mono text-slate-700 shadow"
+            className="fixed bottom-2 right-2 z-40 flex items-center gap-3 rounded-md border border-slate-300 bg-white/95 px-3 py-1.5 text-[11px] font-mono text-slate-700 shadow"
         >
             {err ? (
                 <span className="text-rose-700">LSN: {err}</span>

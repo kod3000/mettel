@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 // Developer smoke checklist. Modal-style overlay with a list of scenarios
 // the operator can Run individually or as a batch. Each hits the live API
@@ -26,6 +26,21 @@ interface Scenario {
 interface RunContext {
     apiKey: string;
     stash: Record<string, string>; // pass values between scenarios (e.g. created row id)
+}
+
+// Declarative scenario loaded from public/smoke-scenarios.json. Adding
+// one only requires editing that JSON + redeploying the static bundle —
+// no code change. Rich scenarios that need to stash or do multi-step
+// logic still live in the TS list above.
+interface JsonScenario {
+    id: string;
+    name: string;
+    description: string;
+    method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+    path: string;
+    body?: unknown;
+    expectStatus?: number;
+    expectContains?: string;
 }
 
 // Utility fetch with the current key + JSON accept.
@@ -222,9 +237,57 @@ const SCENARIOS: Scenario[] = [
     },
 ];
 
+// Turn a JSON scenario config into the same Scenario shape the built-in
+// list uses. Kept out of the module top-level so it captures apiKey via
+// closure at the point of use.
+function scenarioFromJson(js: JsonScenario): Scenario {
+    return {
+        id: js.id,
+        name: js.name,
+        description: js.description,
+        run: async ({ apiKey }) => {
+            const res = await api(apiKey, js.path, {
+                method: js.method ?? "GET",
+                headers: js.body !== undefined ? { "Content-Type": "application/json" } : undefined,
+                body: js.body !== undefined ? JSON.stringify(js.body) : undefined,
+            });
+            const want = js.expectStatus ?? 200;
+            if (res.status !== want) return { ok: false, detail: `HTTP ${res.status} (want ${want})` };
+            if (js.expectContains) {
+                const text = await res.text();
+                if (!text.includes(js.expectContains)) {
+                    return { ok: false, detail: `response missing "${js.expectContains}"` };
+                }
+                return { ok: true, detail: `HTTP ${res.status} + contains "${js.expectContains}"` };
+            }
+            return { ok: true, detail: `HTTP ${res.status}` };
+        },
+    };
+}
+
 export function DevPanel({ apiKey, onClose }: Props) {
     const [results, setResults] = useState<Record<string, { status: Status; detail: string; ms: number }>>({});
     const [running, setRunning] = useState(false);
+    const [extra, setExtra] = useState<Scenario[]>([]);
+
+    // Load /smoke-scenarios.json once on mount. Failures are silent —
+    // the JSON file is optional; the built-in TS scenarios keep working.
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await fetch("/smoke-scenarios.json", { cache: "no-cache" });
+                if (!res.ok) return;
+                const body = await res.json() as { scenarios?: JsonScenario[] };
+                if (!cancelled && Array.isArray(body.scenarios)) {
+                    setExtra(body.scenarios.map(scenarioFromJson));
+                }
+            } catch { /* file missing or malformed — ignore */ }
+        })();
+        return () => { cancelled = true; };
+    }, []);
+
+    const scenarios = SCENARIOS.concat(extra);
 
     async function runOne(sc: Scenario, stash: Record<string, string>) {
         setResults((r) => ({ ...r, [sc.id]: { status: "running", detail: "…", ms: 0 } }));
@@ -243,7 +306,7 @@ export function DevPanel({ apiKey, onClose }: Props) {
         setRunning(true);
         setResults({});
         const stash: Record<string, string> = {};
-        for (const sc of SCENARIOS) await runOne(sc, stash);
+        for (const sc of scenarios) await runOne(sc, stash);
         setRunning(false);
     }
 
@@ -302,7 +365,7 @@ export function DevPanel({ apiKey, onClose }: Props) {
                             </tr>
                         </thead>
                         <tbody>
-                            {SCENARIOS.map((sc) => {
+                            {scenarios.map((sc) => {
                                 const r = results[sc.id];
                                 return (
                                     <tr key={sc.id} className="border-t border-slate-100">

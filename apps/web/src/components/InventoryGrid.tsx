@@ -12,12 +12,14 @@ import {
     getCoreRowModel,
     useReactTable,
     type SortingState,
+    type VisibilityState,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { InventoryRow, ListParams } from "../api/inventory.js";
 import { useInventoryList } from "../hooks/useInventoryList.js";
 import { CountDisplay } from "./CountDisplay.js";
+import { ColumnPicker, loadColumnVisibility, saveColumnVisibility } from "./ColumnPicker.js";
 
 interface Props {
     params: ListParams;
@@ -31,19 +33,21 @@ const columnHelper = createColumnHelper<InventoryRow>();
 
 // [id, header, min-column-width]. Row + header both use these widths in a
 // grid-template-columns definition so headers always align with cells.
-const COLUMN_WIDTHS: Array<[keyof InventoryRow, string, string]> = [
-    ["serviceNumber",   "Service #",  "140px"],
-    ["productCategory", "Category",   "110px"],
-    ["productName",     "Product",    "minmax(220px, 2fr)"],
-    ["status",          "Status",     "120px"],
-    ["city",            "City",       "140px"],
-    ["state",           "State",      "70px"],
-    ["assignee",        "Assignee",   "120px"],
-    ["createdAt",       "Created",    "170px"],
-    ["updatedAt",       "Updated",    "170px"],
+// [id, header, min-column-width, required]
+// `required` means the ColumnPicker can't hide it — the grid still needs
+// SOMETHING to point to when the user clicks a row.
+const COLUMN_META: Array<{ id: keyof InventoryRow; label: string; width: string; required?: boolean }> = [
+    { id: "serviceNumber",   label: "Service #",  width: "140px" },
+    { id: "productCategory", label: "Category",   width: "110px" },
+    { id: "productName",     label: "Product",    width: "minmax(220px, 2fr)", required: true },
+    { id: "status",          label: "Status",     width: "120px" },
+    { id: "city",            label: "City",       width: "140px" },
+    { id: "state",           label: "State",      width: "70px" },
+    { id: "assignee",        label: "Assignee",   width: "120px" },
+    { id: "createdAt",       label: "Created",    width: "170px" },
+    { id: "updatedAt",       label: "Updated",    width: "170px" },
 ];
-const GRID_TEMPLATE = COLUMN_WIDTHS.map(([, , w]) => w).join(" ");
-const MIN_TABLE_WIDTH = "1300px";
+const PICKER_COLUMNS = COLUMN_META.map((c) => ({ id: c.id as string, label: c.label, required: c.required }));
 
 const columns = [
     columnHelper.accessor("serviceNumber", { header: "Service #", cell: (i) => (
@@ -78,6 +82,36 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
         () => query.data?.pages.flatMap((p) => p.rows ?? []) ?? [],
         [query.data]);
 
+    // Column visibility — persisted per browser (not per tenant since column
+    // preference tracks the operator, not the data set).
+    const [visibility, setVisibility] = useState<VisibilityState>(() => loadColumnVisibility());
+    const applyVisibility = (next: VisibilityState) => {
+        // Force required columns back on if the caller cleared everything
+        // via localStorage tampering — belt for the picker's disabled state.
+        for (const c of COLUMN_META) if (c.required) next[c.id] = true;
+        saveColumnVisibility(next);
+        setVisibility(next);
+    };
+
+    // Derived grid-template-columns from the visible subset. Header + rows
+    // both reference this so alignment stays true when columns hide/show.
+    const gridTemplate = useMemo(() =>
+        COLUMN_META.filter((c) => visibility[c.id] !== false).map((c) => c.width).join(" "),
+        [visibility]);
+    const minTableWidth = useMemo(() => {
+        // Sum of numeric column widths (px), rough enough for horizontal
+        // scroll thresholds. Fractional/minmax columns count as their
+        // minimum. Prevents the layout from collapsing on very narrow
+        // viewports when few columns are visible.
+        let total = 0;
+        for (const c of COLUMN_META) {
+            if (visibility[c.id] === false) continue;
+            const m = /(\d+)px/.exec(c.width);
+            total += m ? Number(m[1]) : 200;
+        }
+        return `${Math.max(total, 400)}px`;
+    }, [visibility]);
+
     const sorting: SortingState = useMemo(() => {
         const key = params.sort ?? "createdAt";
         return [{ id: key, desc: (params.dir ?? "desc") === "desc" }];
@@ -86,10 +120,14 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
     const table = useReactTable({
         data: rows,
         columns,
-        state: { sorting },
+        state: { sorting, columnVisibility: visibility },
         getCoreRowModel: getCoreRowModel(),
         manualSorting: true,
         manualPagination: true,
+        onColumnVisibilityChange: (updater) => {
+            const next = typeof updater === "function" ? updater(visibility) : updater;
+            applyVisibility(next);
+        },
         onSortingChange: (updater) => {
             const next = typeof updater === "function" ? updater(sorting) : updater;
             const first = next[0];
@@ -119,11 +157,20 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
 
     return (
         <div className="flex flex-col h-full min-h-[480px] bg-white">
-            <CountDisplay
-                totalEstimate={lastPage?.totalEstimate}
-                filteredCount={lastPage?.filteredCount}
-                lastServerMs={lastPage?.tookMs}
-                loaded={rows.length} />
+            <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-1.5">
+                <div className="flex-1">
+                    <CountDisplay
+                        totalEstimate={lastPage?.totalEstimate}
+                        filteredCount={lastPage?.filteredCount}
+                        lastServerMs={lastPage?.tookMs}
+                        loaded={rows.length} />
+                </div>
+                <ColumnPicker
+                    columns={PICKER_COLUMNS}
+                    visible={visibility}
+                    onChange={applyVisibility}
+                />
+            </div>
 
             {/* Horizontal + vertical scroll container. Row and header both use
                 the same grid-template-columns so alignment stays true even
@@ -133,11 +180,11 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
                 data-testid="grid-scroll"
                 className="flex-1 overflow-auto border-t border-slate-200 relative"
             >
-                <div style={{ minWidth: MIN_TABLE_WIDTH }}>
+                <div style={{ minWidth: minTableWidth }}>
                     {/* Sticky header */}
                     <div
                         className="sticky top-0 z-10 bg-slate-50 border-b border-slate-200 text-[11px] font-semibold tracking-wide text-slate-500 uppercase"
-                        style={{ display: "grid", gridTemplateColumns: GRID_TEMPLATE }}>
+                        style={{ display: "grid", gridTemplateColumns: gridTemplate }}>
                         {table.getHeaderGroups()[0].headers.map((h) => {
                             const isSortable = SORTABLE.has(h.column.id);
                             return (
@@ -192,7 +239,7 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
                                             left: 0, right: 0,
                                             height: vr.size,
                                             display: "grid",
-                                            gridTemplateColumns: GRID_TEMPLATE,
+                                            gridTemplateColumns: gridTemplate,
                                         }}
                                         className={rowClassName(clickable, gpuHover)}
                                     >
