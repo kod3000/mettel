@@ -3,6 +3,7 @@ import { useState } from "react";
 import { ApiError } from "../api/client.js";
 import { useApi } from "../api/context.js";
 import { createInventory, type CreateRequest, type InventoryRow } from "../api/inventory.js";
+import { reportApiError } from "../api/reportError.js";
 
 const CATEGORIES = ["voice", "data", "wireless", "other"] as const;
 const INITIAL_STATUSES = ["pending", "active"] as const;
@@ -27,11 +28,16 @@ export function CreateInventoryModal({ open, onClose }: Props) {
             onClose();
         },
         onError: (err) => {
-            const map = { ...(err.problem.errors ?? {}) };
-            if (err.slug === "duplicate-service-number" && !map.serviceNumber) {
-                map.serviceNumber = [err.problem.detail ?? err.problem.title ?? "Duplicate service number"];
+            // Synth a field-level error for the duplicate-service-number
+            // slug (the API returns it as a 409 with no `errors` map). The
+            // shared reporter would toast in that case; we want it inline
+            // against the serviceNumber input instead.
+            if (err.slug === "duplicate-service-number") {
+                setErrors({ serviceNumber: [err.problem.detail ?? err.problem.title ?? "Duplicate service number"] });
+                return;
             }
-            setErrors(map);
+            const map = reportApiError(err, { context: "Create failed" });
+            if (map) setErrors(map);
         },
     });
 

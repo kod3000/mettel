@@ -1,5 +1,6 @@
 @inject BruinApiClient Api
 @inject MeService Me
+@inject ErrorReporter Reporter
 @implements IDisposable
 
 @* Persistent named filter presets — GET /api/v1/saved-views on mount,
@@ -121,7 +122,7 @@
             _views.Add(created);
             _name = "";
         }
-        catch { /* leave the input filled so the user can retry */ }
+        catch (Exception ex) { Reporter.Report(ex, "Save view failed"); /* input stays for retry */ }
         finally
         {
             _saving = false;
@@ -137,7 +138,7 @@
             await Api.DeleteSavedViewAsync(v.Id, _cts!.Token);
             _views.Remove(v);
         }
-        catch { /* ignore — reloading on next mount will resync */ }
+        catch (Exception ex) { Reporter.Report(ex, "Delete view failed"); }
         StateHasChanged();
     }
 

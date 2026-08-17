@@ -19,6 +19,8 @@ import { ClientPicker } from "./components/ClientPicker.js";
 import { RowDetailDrawer } from "./components/RowDetailDrawer.js";
 import { ApiReferencePanel } from "./components/ApiReferencePanel.js";
 import { Toaster } from "./components/Toaster.js";
+import { LsnStatusBar } from "./components/LsnStatusBar.js";
+import { DevPanel } from "./components/DevPanel.js";
 import {
     apiKeyForRole, loadRole, loadTenant, saveRole, saveTenant,
     type Role, type Tenant,
@@ -73,6 +75,7 @@ function AppShell({ tenant, role, onTenantChange, onRoleChange }: {
     const [createOpen, setCreateOpen] = useState(false);
     const [selectedRow, setSelectedRow] = useState<InventoryRow | null>(null);
     const [apiRefOpen, setApiRefOpen] = useState(false);
+    const [devOpen, setDevOpen] = useState(false);
     // GPU-UI mode: on by default so first-time users see the animation;
     // toggle off if the machine is slow or the effect is distracting.
     // Preference persists across refresh via localStorage.
@@ -122,6 +125,8 @@ function AppShell({ tenant, role, onTenantChange, onRoleChange }: {
                     setSelectedRow={setSelectedRow}
                     apiRefOpen={apiRefOpen}
                     setApiRefOpen={setApiRefOpen}
+                    devOpen={devOpen}
+                    setDevOpen={setDevOpen}
                     gpuHover={gpuHover}
                     setGpuHover={setGpuHoverPersistent}
                     onTenantChange={onTenantChange}
@@ -139,6 +144,7 @@ function AppShellInner(props: {
     createOpen: boolean; setCreateOpen: (v: boolean) => void;
     selectedRow: InventoryRow | null; setSelectedRow: (r: InventoryRow | null) => void;
     apiRefOpen: boolean; setApiRefOpen: (v: boolean) => void;
+    devOpen: boolean; setDevOpen: (v: boolean) => void;
     gpuHover: boolean; setGpuHover: (v: boolean) => void;
     onTenantChange: (t: Tenant) => void;
     onRoleChange: (r: Role) => void;
@@ -146,6 +152,7 @@ function AppShellInner(props: {
     const {
         tenant, role, apiKey, params, setParams, createOpen, setCreateOpen,
         selectedRow, setSelectedRow, apiRefOpen, setApiRefOpen,
+        devOpen, setDevOpen,
         gpuHover, setGpuHover, onTenantChange, onRoleChange,
     } = props;
 
@@ -235,7 +242,23 @@ function AppShellInner(props: {
                 />
             )}
             <Toaster />
+            <LsnStatusBar apiKey={apiKey} />
+            {canDelete && <DevButton onOpen={() => setDevOpen(true)} />}
+            {devOpen && <DevPanel apiKey={apiKey} onClose={() => setDevOpen(false)} />}
         </div>
+    );
+}
+
+function DevButton({ onOpen }: { onOpen: () => void }) {
+    return (
+        <button
+            type="button"
+            onClick={onOpen}
+            title="Open developer smoke checklist"
+            className="fixed bottom-2 left-24 z-40 rounded-md border border-indigo-300 bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-800 shadow hover:bg-indigo-100"
+        >
+            Dev
+        </button>
     );
 }
 

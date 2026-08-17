@@ -14,6 +14,23 @@ namespace Bruin.Api.Features.Inventory;
 // tenant-first WHERE, capped counts.
 public sealed class ListHandler(IReadRouter db, CursorCodec cursors, TenantRowEstimator estimator)
 {
+    // Wire-name → SQL column, for the fields= narrowing feature. Kept as
+    // an ordered, whitelisted map (never accepts user column names directly)
+    // so a stray `?fields=id` or `?fields=; DROP TABLE` is silently dropped.
+    private static readonly IReadOnlyDictionary<string, string> SearchableFieldColumn =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["productName"]     = "product_name",
+            ["productCategory"] = "product_category",
+            ["serviceNumber"]   = "service_number",
+            ["status"]          = "status",
+            ["city"]            = "city",
+            ["state"]           = "state",
+            ["address"]         = "address",
+            ["assignee"]        = "assignee",
+            ["notes"]           = "notes",
+        };
+
     public async Task<object> Handle(Guid clientId, ListQuery q, CancellationToken ct)
     {
         // 1. Cursor -------------------------------------------------------
@@ -93,8 +110,9 @@ public sealed class ListHandler(IReadRouter db, CursorCodec cursors, TenantRowEs
             var cleaned = System.Text.RegularExpressions.Regex.Replace(q.Q!, @"[^\w\-]+", " ").Trim();
             var terms = cleaned.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             if (terms.Length == 0) { hasSearch = false; }
-            else
+            else if (q.Fields.Count == 0)
             {
+                // Default: use tsvector (indexed) + service_number prefix.
                 // AND all prefix lexemes; matches product-name substrings and
                 // multi-word tokens like "Hosted PBX" → "hosted:* & pbx:*".
                 var tsq = string.Join(" & ", terms.Select(t => t + ":*"));
@@ -105,6 +123,33 @@ public sealed class ListHandler(IReadRouter db, CursorCodec cursors, TenantRowEs
                         search_tsv @@ to_tsquery('simple', @tsq)
                         OR service_number ILIKE @prefix
                     )");
+            }
+            else
+            {
+                // Fine-grained: fields= narrows the search to specific
+                // columns. Uses per-column ILIKE with a % prefix wildcard —
+                // slower than the tsvector path for broad matches, but
+                // gives the operator surgical control ("find X in city+
+                // assignee only"). Terms are AND'd; each term must match
+                // AT LEAST ONE of the selected columns.
+                var wireToCol = SearchableFieldColumn;
+                var selected = q.Fields
+                    .Select(f => wireToCol.TryGetValue(f, out var c) ? c : null)
+                    .Where(c => c is not null)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+                if (selected.Length == 0) { hasSearch = false; }
+                else
+                {
+                    for (int i = 0; i < terms.Length; i++)
+                    {
+                        var pname = $"ft{i}";
+                        p_.Add(pname, "%" + terms[i] + "%");
+                        var ors = string.Join(" OR ",
+                            selected.Select(col => $"{col} ILIKE @{pname}"));
+                        whereStruct.Append(" AND (").Append(ors).Append(")");
+                    }
+                }
             }
         }
 

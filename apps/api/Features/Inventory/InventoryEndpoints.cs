@@ -113,6 +113,14 @@ public static class InventoryEndpoints
         var statuses   = query["status"].Where(NonEmpty).Select(s => s!).ToArray();
         var categories = query["productCategory"].Where(NonEmpty).Select(s => s!).ToArray();
         var states     = query["state"].Where(NonEmpty).Select(s => s!).ToArray();
+        // fields= accepts both repeated-key (?fields=a&fields=b) and
+        // comma-separated (?fields=a,b) shapes for operator convenience.
+        // Unknown entries are silently dropped by the handler's whitelist.
+        var fields = query["fields"]
+            .Where(NonEmpty)
+            .SelectMany(s => s!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Where(NonEmpty)
+            .ToArray();
 
         foreach (var s in statuses)
             if (!InventoryStatuses.All.Contains(s))
@@ -126,6 +134,7 @@ public static class InventoryEndpoints
         var listQuery = new ListQuery
         {
             Q = q,
+            Fields = fields,
             Statuses = statuses,
             Categories = categories,
             States = states,

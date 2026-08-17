@@ -9,6 +9,20 @@ const STATUSES = ["pending", "active", "disconnected"] as const;
 const CATEGORIES = ["voice", "data", "wireless", "other"] as const;
 const SORT_KEYS: readonly SortKey[] = ["createdAt", "updatedAt", "status", "serviceNumber", "productName"];
 
+// Wire names the server whitelists for `fields=`. Order matters — this
+// is also the display order of the chips. Keeping the labels short for
+// the crowded filter bar; hover title spells out the intent.
+const SEARCH_FIELDS: readonly { wire: string; label: string; title: string }[] = [
+    { wire: "productName",     label: "product",  title: "Match against product name" },
+    { wire: "serviceNumber",   label: "service#", title: "Match against service number" },
+    { wire: "city",            label: "city",     title: "Match against city" },
+    { wire: "state",           label: "state",    title: "Match against state" },
+    { wire: "address",         label: "address",  title: "Match against address" },
+    { wire: "assignee",        label: "assignee", title: "Match against assignee" },
+    { wire: "notes",           label: "notes",    title: "Match against notes" },
+];
+const ALL_FIELD_WIRES = SEARCH_FIELDS.map((f) => f.wire);
+
 interface Props {
     value: ListParams;
     onChange: (next: ListParams) => void;
@@ -49,10 +63,23 @@ export function Filters({ value, onChange }: Props) {
         onChange({
             ...value,
             q: undefined,
+            fields: undefined,
             status: undefined,
             productCategory: undefined,
             state: undefined,
         });
+    };
+
+    // A chip is "on" when its wire name is in fields — but fields=undefined
+    // (default) means "all on" (broad tsvector search). Toggling any chip
+    // off crystalizes the current all-set into the array so the negation
+    // is representable.
+    const activeFields: string[] = value.fields ?? [...ALL_FIELD_WIRES];
+    const toggleField = (wire: string) => {
+        const next = toggle(activeFields, wire) ?? [];
+        // If all are on again, drop the param entirely (default = tsvector).
+        const allOn = ALL_FIELD_WIRES.every((w) => next.includes(w));
+        onChange({ ...value, fields: allOn ? undefined : next });
     };
 
     return (
@@ -65,6 +92,31 @@ export function Filters({ value, onChange }: Props) {
                 data-testid="search-input"
                 className="w-72 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
+
+            {(value.q?.trim() ?? "") !== "" && (
+                <fieldset className="flex items-center gap-1.5 border-0 p-0 m-0" title="Restrict the search to specific columns. All-on uses the fast tsvector index; any deselected falls back to per-column ILIKE.">
+                    <legend className="text-xs text-slate-500 pr-1 float-none inline">Search in</legend>
+                    {SEARCH_FIELDS.map((f) => {
+                        const on = activeFields.includes(f.wire);
+                        return (
+                            <button
+                                key={f.wire}
+                                type="button"
+                                onClick={() => toggleField(f.wire)}
+                                title={f.title}
+                                data-testid={`filter-search-in-${f.wire}`}
+                                className={`rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset transition ${
+                                    on
+                                        ? "bg-sky-100 text-sky-800 ring-sky-300"
+                                        : "bg-white text-slate-400 ring-slate-200 hover:bg-slate-50 line-through"
+                                }`}
+                            >
+                                {f.label}
+                            </button>
+                        );
+                    })}
+                </fieldset>
+            )}
 
             <FilterGroup
                 label="Status"

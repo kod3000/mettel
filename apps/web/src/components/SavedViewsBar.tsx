@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useApi } from "../api/context.js";
 import { createSavedView, deleteSavedView, listSavedViews, type SavedView } from "../api/savedViews.js";
 import type { ListParams } from "../api/inventory.js";
+import { reportApiError } from "../api/reportError.js";
 
 interface Props {
     params: ListParams;
@@ -37,11 +38,13 @@ export function SavedViewsBar({ params, onApply, canWrite }: Props) {
             localStorage.setItem(CACHE_KEY, v.id!);
             qc.invalidateQueries({ queryKey: ["saved-views"] });
         },
+        onError: (err) => reportApiError(err, { context: "Save view failed" }),
     });
 
     const del = useMutation({
         mutationFn: (id: string) => deleteSavedView(client, id),
         onSuccess: () => qc.invalidateQueries({ queryKey: ["saved-views"] }),
+        onError: (err) => reportApiError(err, { context: "Delete view failed" }),
     });
 
     const apply = (v: SavedView) => {

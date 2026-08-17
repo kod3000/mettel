@@ -19,6 +19,7 @@ import { useEffect, useState } from "react";
 import { ApiError } from "../api/client.js";
 import { useApi } from "../api/context.js";
 import { toast } from "./Toaster.js";
+import { reportApiError } from "../api/reportError.js";
 import {
     deleteInventory,
     detailQueryKey,
@@ -119,13 +120,10 @@ export function RowDetailDrawer({ id, onClose, canWrite, canDelete, adminOnlyFie
             ]);
         },
         onError: async (err) => {
-            // ProblemDetails.errors is at the top level per aliases.ts.
-            const errs = err.problem.errors ?? null;
+            const errs = reportApiError(err, { context: "Save failed" });
             if (errs) setFieldErrors(errs);
             if (err.isSlug("concurrency-conflict")) {
                 await qc.invalidateQueries({ queryKey: detailQueryKey(id) });
-            } else if (!errs) {
-                toast.error(err.problem.detail ?? err.problem.title ?? "Save failed");
             }
         },
     });
@@ -137,9 +135,7 @@ export function RowDetailDrawer({ id, onClose, canWrite, canDelete, adminOnlyFie
             await qc.invalidateQueries({ queryKey: ["inventory", "list"] });
             onClose();
         },
-        onError: (err) => {
-            toast.error(err.problem.detail ?? err.problem.title ?? "Delete failed");
-        },
+        onError: (err) => reportApiError(err, { context: "Delete failed" }),
     });
 
     // Esc-to-close; disabled while a mutation is in flight so the user can't

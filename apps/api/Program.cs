@@ -150,6 +150,7 @@ app.MapOpenApi("/openapi/{documentName}.json");
 
 app.MapInventory();
 Bruin.Api.Features.Tenancy.MeEndpoint.MapMe(app);
+Bruin.Api.Features.Debug.LsnEndpoint.MapDebugLsn(app);
 Bruin.Api.Features.SavedViews.SavedViewEndpoints.MapSavedViews(app);
 
 // Bulk-job endpoints. Upload directory is shared with the worker via a

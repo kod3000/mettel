@@ -17,6 +17,10 @@ export type SortDir = "asc" | "desc";
 
 export interface ListParams {
     q?: string;
+    // Narrow the search to a subset of columns. Wire names match the
+    // server's whitelist (productName, city, state, address, assignee, etc).
+    // Undefined / empty = default broad search via the tsvector index.
+    fields?: string[];
     status?: string[];
     productCategory?: string[];
     state?: string[];
@@ -38,6 +42,7 @@ export const listQueryKey = (p: ListParams) => [
     "list",
     {
         q: p.q ?? null,
+        fields: [...(p.fields ?? [])].sort(),
         status: [...(p.status ?? [])].sort(),
         productCategory: [...(p.productCategory ?? [])].sort(),
         state: [...(p.state ?? [])].sort(),
@@ -55,6 +60,7 @@ export async function listInventory(
     return await client.get<ListResponse>("/api/v1/inventory", {
         query: {
             q: params.q,
+            fields: params.fields,
             status: params.status,
             productCategory: params.productCategory,
             state: params.state,

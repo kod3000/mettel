@@ -5,6 +5,13 @@ namespace Bruin.Api.Features.Inventory;
 public sealed record ListQuery
 {
     public string? Q { get; init; }
+    // Optional narrowing of the search predicate to a subset of columns.
+    // Wire values: productName | productCategory | serviceNumber | status |
+    // city | state | address | assignee | notes. Empty (default) = search
+    // all indexed columns via the tsvector + service_number trigram (fast).
+    // When non-empty, the handler swaps to a per-column ILIKE OR — slower
+    // for broad matches but gives the operator surgical control.
+    public IReadOnlyList<string> Fields { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> Statuses { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> Categories { get; init; } = Array.Empty<string>();
     public IReadOnlyList<string> States { get; init; } = Array.Empty<string>();

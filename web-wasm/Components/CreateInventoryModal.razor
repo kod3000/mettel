@@ -1,4 +1,5 @@
 @inject BruinApiClient Api
+@inject ErrorReporter Reporter
 
 @* Simple modal form matching React's CreateInventoryModal. Server 400
    ProblemDetails.errors map to per-field inline messages; the
@@ -114,21 +115,28 @@
         }
         catch (ApiException ex)
         {
-            _errors = ex.Problem.Errors is null
-                ? new()
-                : new Dictionary<string, string[]>(ex.Problem.Errors,
-                    StringComparer.OrdinalIgnoreCase);
-            // The duplicate-service-number slug arrives as a top-level
-            // detail, not an entry in errors. Fold it onto the field the
-            // user actually sees.
-            if (ex.IsSlug("duplicate-service-number") && !_errors.ContainsKey("serviceNumber"))
+            // Duplicate service number arrives as a 409 with no Errors
+            // map — synthesise a field-level entry so it appears against
+            // the input the user actually filled. Skip the shared
+            // reporter for this case (it would toast, we want inline).
+            if (ex.IsSlug("duplicate-service-number"))
             {
-                _errors["serviceNumber"] = new[] { ex.Problem.Detail ?? ex.Problem.Title ?? "Duplicate service number" };
+                _errors = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["serviceNumber"] = new[] { ex.Problem.Detail ?? ex.Problem.Title ?? "Duplicate service number" },
+                };
             }
-            if (_errors.Count == 0)
+            else
             {
-                _topLevelErr = ex.Problem.Title ?? ex.Problem.Detail ?? "Something went wrong.";
+                var map = Reporter.Report(ex, "Create failed");
+                _errors = map is null
+                    ? new(StringComparer.OrdinalIgnoreCase)
+                    : new Dictionary<string, string[]>(map, StringComparer.OrdinalIgnoreCase);
             }
+        }
+        catch (Exception ex)
+        {
+            Reporter.Report(ex, "Create failed");
         }
         finally
         {

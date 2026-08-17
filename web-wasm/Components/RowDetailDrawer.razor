@@ -1,20 +1,13 @@
 @inject BruinApiClient Api
 @inject MeService Me
 @inject ToastService Toasts
+@inject ErrorReporter Reporter
 @implements IDisposable
 
-@* Right-side drawer: view + edit + soft-delete. Mirrors the React
-   RowDetailDrawer.tsx behavior:
-     - rowVersion from the detail read is echoed on PATCH; 409
-       concurrency-conflict triggers a refetch.
-     - 5xx errors enter an auto-recovery state with backoff retries;
-       4xx errors are terminal.
-     - Backdrop click + Esc close the drawer when idle.
-     - X-Write-LSN capture is handled up-stack by ApiKeyHandler.
-     - Edit mode toggles into inline inputs; ProblemDetails.errors
-       lands as per-field validation messages under each input.
-     - Delete row (admin-only) → confirm modal → soft-delete → close
-       drawer + toast. *@
+@* Right-side drawer: view + edit + soft-delete. Mirrors
+   apps/web/src/components/RowDetailDrawer.tsx. Per-field mutators are
+   split into named methods because Razor rejects `\"literal\"` inside
+   inline lambdas in attributes (see session handoff notes). *@
 
 <div class="drawer-backdrop" @onclick="OnBackdrop">
     <aside class="drawer" role="dialog" aria-label="Inventory detail" @onclick:stopPropagation="true">
@@ -53,56 +46,44 @@
             {
                 <div class="edit-form">
                     <EditField Label="Service #" Name="serviceNumber" Required="true"
-                               Value="@_draft["serviceNumber"]"
-                               ValueChanged="@(v => SetField(\"serviceNumber\", v))"
-                               ReadOnly="@IsReadOnly(\"serviceNumber\")"
-                               Errors="@FieldErrs(\"serviceNumber\")" />
+                               Value="@_draft["serviceNumber"]" ValueChanged="OnServiceNumberChanged"
+                               ReadOnly="@IsReadOnlyServiceNumber" Errors="@FieldErrs("serviceNumber")" />
                     <EditField Label="Product name" Name="productName" Required="true"
-                               Value="@_draft["productName"]"
-                               ValueChanged="@(v => SetField(\"productName\", v))"
-                               ReadOnly="@IsReadOnly(\"productName\")"
-                               Errors="@FieldErrs(\"productName\")" />
+                               Value="@_draft["productName"]" ValueChanged="OnProductNameChanged"
+                               ReadOnly="@IsReadOnlyProductName" Errors="@FieldErrs("productName")" />
                     <div class="edit-block">
                         <label>
                             Category
-                            @if (IsReadOnly("productCategory")) { <span class="ro-hint">(admin only)</span> }
+                            @if (IsReadOnlyProductCategory) { <span class="ro-hint">(admin only)</span> }
                         </label>
-                        <select disabled="@(IsReadOnly(\"productCategory\") || _pending)"
+                        <select disabled="@(IsReadOnlyProductCategory || _pending)"
                                 value="@_draft["productCategory"]"
-                                @onchange="e => SetField(\"productCategory\", e.Value?.ToString() ?? \"\")">
-                            @foreach (var c in new[] { "voice", "data", "wireless", "other" })
-                            {
-                                <option value="@c">@c</option>
-                            }
+                                @onchange="OnProductCategoryChanged">
+                            <option value="voice">voice</option>
+                            <option value="data">data</option>
+                            <option value="wireless">wireless</option>
+                            <option value="other">other</option>
                         </select>
                         @foreach (var m in FieldErrs("productCategory")) { <div class="ferr">@m</div> }
                     </div>
                     <EditField Label="City" Name="city"
-                               Value="@_draft["city"]"
-                               ValueChanged="@(v => SetField(\"city\", v))"
-                               ReadOnly="@IsReadOnly(\"city\")"
-                               Errors="@FieldErrs(\"city\")" />
+                               Value="@_draft["city"]" ValueChanged="OnCityChanged"
+                               ReadOnly="@IsReadOnlyCity" Errors="@FieldErrs("city")" />
                     <EditField Label="State" Name="state"
-                               Value="@_draft["state"]"
-                               ValueChanged="@(v => SetField(\"state\", v))"
-                               ReadOnly="@IsReadOnly(\"state\")"
-                               Errors="@FieldErrs(\"state\")" />
+                               Value="@_draft["state"]" ValueChanged="OnStateChanged"
+                               ReadOnly="@IsReadOnlyState" Errors="@FieldErrs("state")" />
                     <EditField Label="Address" Name="address"
-                               Value="@_draft["address"]"
-                               ValueChanged="@(v => SetField(\"address\", v))"
-                               ReadOnly="@IsReadOnly(\"address\")"
-                               Errors="@FieldErrs(\"address\")" />
+                               Value="@_draft["address"]" ValueChanged="OnAddressChanged"
+                               ReadOnly="@IsReadOnlyAddress" Errors="@FieldErrs("address")" />
                     <EditField Label="Assignee" Name="assignee"
-                               Value="@_draft["assignee"]"
-                               ValueChanged="@(v => SetField(\"assignee\", v))"
-                               ReadOnly="@IsReadOnly(\"assignee\")"
-                               Errors="@FieldErrs(\"assignee\")" />
+                               Value="@_draft["assignee"]" ValueChanged="OnAssigneeChanged"
+                               ReadOnly="@IsReadOnlyAssignee" Errors="@FieldErrs("assignee")" />
                     <div class="edit-block">
                         <label>Notes</label>
                         <textarea rows="3"
-                                  disabled="@(IsReadOnly(\"notes\") || _pending)"
+                                  disabled="@(IsReadOnlyNotes || _pending)"
                                   value="@_draft["notes"]"
-                                  @oninput="e => SetField(\"notes\", e.Value?.ToString() ?? \"\")"></textarea>
+                                  @oninput="OnNotesChanged"></textarea>
                         @foreach (var m in FieldErrs("notes")) { <div class="ferr">@m</div> }
                     </div>
                     <div style="font-size:11px;color:var(--slate-500)">
@@ -158,7 +139,7 @@
                         <button class="btn" @onclick="StartEdit">Edit fields</button>
                         @if (Me.CanDelete)
                         {
-                            <button class="btn danger" disabled="@_pending" @onclick="() => _confirmDelete = true">
+                            <button class="btn danger" disabled="@_pending" @onclick="OpenDeleteConfirm">
                                 Delete row
                             </button>
                         }
@@ -209,7 +190,7 @@
 
 @if (_confirmDelete && _row is not null)
 {
-    <div class="modal-backdrop" @onclick="() => _confirmDelete = false">
+    <div class="modal-backdrop" @onclick="CloseDeleteConfirm">
         <div class="modal" role="alertdialog" @onclick:stopPropagation="true">
             <div style="font-weight:600">Delete inventory row?</div>
             <div style="margin-top:4px;font-size:12px;color:var(--slate-600)">
@@ -220,7 +201,7 @@
                 the same service number afterwards.
             </div>
             <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
-                <button class="btn" disabled="@_pending" @onclick="() => _confirmDelete = false">Cancel</button>
+                <button class="btn" disabled="@_pending" @onclick="CloseDeleteConfirm">Cancel</button>
                 <button class="btn danger" disabled="@_pending" @onclick="DeleteAsync">
                     @(_pending ? "Deleting…" : "Delete")
                 </button>
@@ -284,6 +265,30 @@
         "serviceNumber", "productName", "productCategory",
         "city", "state", "address", "assignee", "notes",
     };
+
+    // Per-field read-only shortcuts (avoid method calls in Razor bool attrs).
+    private bool IsReadOnlyServiceNumber   => IsReadOnly("serviceNumber");
+    private bool IsReadOnlyProductName     => IsReadOnly("productName");
+    private bool IsReadOnlyProductCategory => IsReadOnly("productCategory");
+    private bool IsReadOnlyCity            => IsReadOnly("city");
+    private bool IsReadOnlyState           => IsReadOnly("state");
+    private bool IsReadOnlyAddress         => IsReadOnly("address");
+    private bool IsReadOnlyAssignee        => IsReadOnly("assignee");
+    private bool IsReadOnlyNotes           => IsReadOnly("notes");
+
+    // Per-field setters — needed because Razor rejects escaped string
+    // literals inside inline lambdas in attributes.
+    private void OnServiceNumberChanged(string v)   => SetField("serviceNumber", v);
+    private void OnProductNameChanged(string v)     => SetField("productName", v);
+    private void OnProductCategoryChanged(ChangeEventArgs e) => SetField("productCategory", e.Value?.ToString() ?? "");
+    private void OnCityChanged(string v)            => SetField("city", v);
+    private void OnStateChanged(string v)           => SetField("state", v);
+    private void OnAddressChanged(string v)         => SetField("address", v);
+    private void OnAssigneeChanged(string v)        => SetField("assignee", v);
+    private void OnNotesChanged(ChangeEventArgs e)  => SetField("notes", e.Value?.ToString() ?? "");
+
+    private void OpenDeleteConfirm()  => _confirmDelete = true;
+    private void CloseDeleteConfirm() => _confirmDelete = false;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -399,9 +404,10 @@
         }
         catch (ApiException ex)
         {
-            if (ex.Problem.Errors is not null)
+            var map = Reporter.Report(ex, "Save failed");
+            if (map is not null)
             {
-                _fieldErrors = new Dictionary<string, string[]>(ex.Problem.Errors, StringComparer.Ordinal);
+                _fieldErrors = new Dictionary<string, string[]>(map, StringComparer.Ordinal);
             }
             if (ex.IsSlug("concurrency-conflict"))
             {
@@ -409,12 +415,9 @@
                 catch { /* ignore refetch fail */ }
                 Toasts.Error("Row changed while editing — reloaded.");
             }
-            else if (ex.Problem.Errors is null)
-            {
-                Toasts.Error(ex.Problem.Detail ?? ex.Problem.Title ?? "Save failed");
-            }
         }
         catch (OperationCanceledException) { }
+        catch (Exception ex) { Reporter.Report(ex, "Save failed"); }
         finally
         {
             _pending = false;
@@ -436,11 +439,8 @@
             Toasts.Info("Row deleted.");
             await OnClose();
         }
-        catch (ApiException ex)
-        {
-            Toasts.Error(ex.Problem.Detail ?? ex.Problem.Title ?? "Delete failed");
-        }
         catch (OperationCanceledException) { }
+        catch (Exception ex) { Reporter.Report(ex, "Delete failed"); }
         finally
         {
             _pending = false;

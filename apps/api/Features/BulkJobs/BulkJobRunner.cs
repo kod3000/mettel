@@ -231,7 +231,9 @@ public sealed class BulkJobRunner : BackgroundService
                 SELECT id, client_id, service_number, product_category, product_name, status,
                        city, state, address, assignee, notes
                 FROM deduped
-                ON CONFLICT (client_id, service_number) DO NOTHING
+                ON CONFLICT (client_id, service_number)
+                    WHERE deleted_at IS NULL
+                    DO NOTHING
                 RETURNING id
             )
             SELECT count(*)::int FROM ins", transaction: tx, cancellationToken: ct));
