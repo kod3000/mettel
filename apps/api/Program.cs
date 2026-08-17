@@ -91,11 +91,82 @@ builder.Services.AddSingleton(new CursorCodec(System.Text.Encoding.UTF8.GetBytes
 
 builder.Services.AddScoped<ListHandler>();
 builder.Services.AddScoped<WriteHandler>();
+builder.Services.AddScoped<SnapshotHandler>();
 
 // OpenAPI 3.1 emission (Phase 7). Served at /openapi/v1.json — consumed by
 // `packages/api-types` codegen. Kept dev-only by default; production
 // deployments can gate behind an env var.
-builder.Services.AddOpenApi("v1");
+//
+// Three document patches keep the generated spec honest:
+//   1. Strip `servers`: it echoes `request.Host`, so fetching the spec via
+//      `curl localhost:8081` vs `curl 127.0.0.1:8081` produced two committed
+//      files and `make verify` flipped on the diff. Codegen doesn't need URLs.
+//   2. Add `errors` to ProblemDetails: RFC 7807 validation responses carry a
+//      per-field `errors` map (see Errors/Problem.cs → `Extensions["errors"]`),
+//      but the built-in ProblemDetails schema doesn't declare it. Without this
+//      the SPA has to hand-widen the type in aliases.ts, and the WASM DTO
+//      guesses. Declaring it once here keeps every client honest.
+//   3. Add `enum` to `status` / `productCategory` on InventoryRow + CreateRequest:
+//      the vocabularies are enforced as CHECK constraints and lived in
+//      Domain/Inventory.cs; surfacing them on the wire gives clients
+//      compile-time narrowing instead of a bare `string`.
+builder.Services.AddOpenApi("v1", opts =>
+{
+    // Strip `servers` — see rationale in the header comment above.
+    opts.AddDocumentTransformer((doc, _, _) =>
+    {
+        doc.Servers?.Clear();
+        return Task.CompletedTask;
+    });
+
+    // Per-schema mutations. `AddSchemaTransformer` is the .NET 9 API for
+    // reliably modifying individual schemas after generation but before
+    // serialization; equivalent post-hoc mutation via AddDocumentTransformer
+    // doesn't persist for nested schema properties (source-gen path
+    // re-emits from the type descriptor).
+    opts.AddSchemaTransformer((schema, ctx, _) =>
+    {
+        // ProblemDetails.errors — see rationale in the header comment.
+        if (ctx.JsonTypeInfo.Type == typeof(Microsoft.AspNetCore.Mvc.ProblemDetails))
+        {
+            schema.Properties["errors"] = new Microsoft.OpenApi.Models.OpenApiSchema
+            {
+                Type = "object",
+                Description = "Per-field validation messages, keyed by property name. Populated on 400 validation-failed responses; absent otherwise.",
+                Nullable = true,
+                AdditionalProperties = new Microsoft.OpenApi.Models.OpenApiSchema
+                {
+                    Type = "array",
+                    Items = new Microsoft.OpenApi.Models.OpenApiSchema { Type = "string" },
+                },
+            };
+        }
+
+        // Enum narrowing on InventoryRow + CreateRequest — the vocabularies
+        // are enforced as CHECK constraints in Domain/Inventory.cs; surfacing
+        // them on the wire gives clients compile-time narrowing.
+        var t = ctx.JsonTypeInfo.Type;
+        if (t == typeof(Bruin.Api.Contracts.InventoryRow) ||
+            t == typeof(Bruin.Api.Features.Inventory.CreateRequest))
+        {
+            ApplyEnum(schema, "status",          Bruin.Api.Domain.InventoryStatuses.All);
+            ApplyEnum(schema, "productCategory", Bruin.Api.Domain.ProductCategories.All);
+        }
+
+        return Task.CompletedTask;
+
+        static void ApplyEnum(
+            Microsoft.OpenApi.Models.OpenApiSchema schema,
+            string propertyName, IReadOnlySet<string> values)
+        {
+            if (schema.Properties is null) return;
+            if (!schema.Properties.TryGetValue(propertyName, out var p)) return;
+            p.Enum = values
+                .Select(v => (Microsoft.OpenApi.Any.IOpenApiAny)new Microsoft.OpenApi.Any.OpenApiString(v))
+                .ToList();
+        }
+    });
+});
 
 var app = builder.Build();
 

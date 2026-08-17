@@ -28,11 +28,9 @@ export type ProblemSlug =
 
 // Alias over the generated ProblemDetails so callers get one type name and
 // codegen owns the field shape. `errors` (the per-field map on validation
-// failures) doesn't appear on the generated schema — ASP.NET's OpenAPI emits
-// the base ProblemDetails only, not the ValidationProblemDetails subtype —
-// so we widen it here rather than hand-authoring an alternative envelope.
-type ProblemDetails = components["schemas"]["ProblemDetails"];
-export type Problem = ProblemDetails & { errors?: Record<string, string[]> };
+// failures) is declared on the generated schema via the AddSchemaTransformer
+// patch in apps/api/Program.cs, so no hand-widening is needed here.
+export type Problem = components["schemas"]["ProblemDetails"];
 
 export type ProblemBySlug<S extends ProblemSlug> = Problem & { __slug: S };
 

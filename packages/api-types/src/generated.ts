@@ -1038,9 +1038,11 @@ export interface components {
         } | null;
         CreateRequest: {
             serviceNumber?: string | null;
-            productCategory?: string | null;
+            /** @enum {string|null} */
+            productCategory?: "voice" | "data" | "wireless" | "other" | null;
             productName?: string | null;
-            status?: string | null;
+            /** @enum {string|null} */
+            status?: "pending" | "active" | "disconnected" | null;
             city?: string | null;
             state?: string | null;
             address?: string | null;
@@ -1062,9 +1064,11 @@ export interface components {
             /** Format: uuid */
             id: string;
             serviceNumber: string;
-            productCategory: string;
+            /** @enum {string} */
+            productCategory: "voice" | "data" | "wireless" | "other";
             productName: string;
-            status: string;
+            /** @enum {string} */
+            status: "pending" | "active" | "disconnected";
             city: string | null;
             state: string | null;
             address: string | null;
@@ -1100,6 +1104,10 @@ export interface components {
             status?: number | null;
             detail?: string | null;
             instance?: string | null;
+            /** @description Per-field validation messages, keyed by property name. Populated on 400 validation-failed responses; absent otherwise. */
+            errors?: {
+                [key: string]: string[];
+            } | null;
         };
         SavedViewList: {
             views: components["schemas"]["SavedViewResponse"][];
