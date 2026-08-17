@@ -64,23 +64,43 @@ transaction as the insert, so crash + restart resumes at the chunk boundary with
 identical final success count (test covered).
 
 **Frontend + contract coherence.** 300ms debounce on search; every in-flight
-request carries **[AbortController / sequence token]**, so a slow early keystroke
-can never paint over a fast later one. Sort or filter change resets to page 1 and
-drops the cursor; scroll appends without touching selection. The two halves share
-one contract rather than mirroring each other: types and enums (`status`,
-`productCategory`) are **[generated from OpenAPI into packages/…]**, so a server
-rename breaks the build instead of the grid. The cursor is opaque to the client —
-it echoes what the server issued and never constructs one, so pagination semantics
-live in exactly one place, and a cursor whose filter-hash no longer matches is
-rejected server-side rather than trusted. Create is the clearest case: the write
-returns its LSN, the client sends it back as `X-Min-LSN` on refetch, and the router
-guarantees the operator reads their own write even off a replica. Read-your-own-
-writes is a property of the two ends agreeing, not of either one alone.
+request carries an **AbortController + query-key ordering guard**, so a slow
+early keystroke can never paint over a fast later one. Sort or filter change
+resets to page 1 and drops the cursor; scroll appends without touching selection.
+The two halves share one contract rather than mirroring each other: types and
+enums (`status`, `productCategory`) are **generated from OpenAPI into
+`packages/api-types`** via `openapi-typescript`, so a server rename breaks the
+build instead of the grid. To keep that generation deterministic the API strips
+its `servers` block via a document transformer — otherwise the committed spec
+flipped between `localhost:8081` and `127.0.0.1:8081` depending on which host
+`curl` was pointed at, and `make verify` was noisy for the wrong reason. The
+cursor is opaque to the client — it echoes what the server issued and never
+constructs one, so pagination semantics live in exactly one place, and a cursor
+whose filter-hash no longer matches is rejected server-side rather than trusted.
+Create is the clearest case: the write returns its LSN, the client sends it back
+as `X-Min-LSN` on refetch, and the router guarantees the operator reads their
+own write even off a replica. Read-your-own-writes is a property of the two ends
+agreeing, not of either one alone. To exercise that contract from a second
+runtime, the same OpenAPI drives a Blazor WebAssembly twin at
+`wasm.mettel.exercise.dany.codes` — feature-identical to the React SPA with a
+hand-written client over the generated types, so any breaking rename fails both
+builds instead of silently drifting in one.
 
-**Multi-tenancy.** Every statement carries `WHERE client_id = @cid`; the EF Core
-global filter is defence in depth; Postgres RLS on `inventory` is the third belt
-(prod connects as non-superuser `bruin_app`). Cross-tenant reads return 404 with a
-ProblemDetails body that leaks nothing — no 403, no FK error.
+**Multi-tenancy + roles.** Every statement carries `WHERE client_id = @cid`;
+the EF Core global filter is defence in depth; Postgres RLS on `inventory` is
+the third belt (prod connects as non-superuser `bruin_app`). Cross-tenant reads
+return 404 with a ProblemDetails body that leaks nothing — no 403, no FK error.
+API keys carry a role (`admin` / `worker` / `reader`) resolved on every request;
+a `RequireRole` endpoint filter gates mutations, and `field_policy` names the
+per-tenant columns only admins may write (e.g. `notes`). `/me` returns the
+tenant, role, and admin-only field list in one shot so the SPA can gate write UI
+without a second round-trip. Deletes are soft — `deleted_at IS NOT NULL` rows
+stay for audit and re-import; every read filter and the `(client_id,
+service_number)` unique index carry a `WHERE deleted_at IS NULL` predicate. The
+bulk-jobs `ON CONFLICT` clause carries the same predicate so Postgres can infer
+the partial index (a plain `ON CONFLICT (client_id, service_number)` raises
+42P10 and the worker silently loops; caught once, guarded now by an integration
+test).
 
 **What production looks like.** Not this, deliberately. The grid should read a
 replica or a purpose-built projection, never the OLTP table — separating the read
@@ -110,7 +130,9 @@ shipped config is 2.5× worse), and single 45s runs at 100 VU can't distinguish
 signal from noise. Either the shipped 12CPU/20GB tuning is actively wrong or
 the runs are too short; both are testable. (3) Full-substring search via an
 inverted index over a normalised column, or an external engine. (4)
-`saved_view.columns` UI — endpoint and persistence shipped, show/hide widget cut.
+`saved_view.columns` UI — the show/hide cog on the grid shipped (browser-local),
+but wiring it to `saved_view.columns` persistence so a view carries its column
+layout across sessions is still open.
 (5) Optimistic create — chose refetch-with-LSN above, which makes the router
 visibly correct instead of dressing up latency. (6) Render path, once saved views
 let operators pull multi-thousand-row sets into the DOM: row virtualization first,
