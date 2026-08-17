@@ -88,6 +88,14 @@ public sealed record SavedViewUpsert(
     [property: JsonPropertyName("sort")]    string? Sort = null,
     [property: JsonPropertyName("columns")] string? Columns = null);
 
+// GET /api/v1/debug/lsn — powers the LSN status bar.
+public sealed record DebugLsnResponse(
+    [property: JsonPropertyName("primary")]    string? Primary,
+    [property: JsonPropertyName("replica")]    string? Replica,
+    [property: JsonPropertyName("lagBytes")]   long    LagBytes,
+    [property: JsonPropertyName("lagSeconds")] double  LagSeconds,
+    [property: JsonPropertyName("reachable")]  bool    Reachable);
+
 // GET /api/v1/me — fetched once per (tenant, role) change to gate write UI.
 public sealed record MeResponse(
     [property: JsonPropertyName("clientId")]       string ClientId,

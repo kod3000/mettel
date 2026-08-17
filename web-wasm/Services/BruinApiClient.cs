@@ -24,6 +24,10 @@ public sealed class BruinApiClient
 
     public sealed record ListParams(
         string? Q = null,
+        // fields= narrows the server-side search to a subset of columns.
+        // Default (null / empty) = broad tsvector search. Non-empty flips
+        // the API to per-column ILIKE OR over the whitelisted names.
+        IReadOnlyCollection<string>? Fields = null,
         IReadOnlyCollection<string>? Status = null,
         IReadOnlyCollection<string>? ProductCategory = null,
         IReadOnlyCollection<string>? State = null,
@@ -43,6 +47,7 @@ public sealed class BruinApiClient
         AppendMulti(qs, "status", p.Status);
         AppendMulti(qs, "productCategory", p.ProductCategory);
         AppendMulti(qs, "state", p.State);
+        AppendMulti(qs, "fields", p.Fields);
 
         var url = $"api/v1/inventory?{qs}";
         using var res = await _http.GetAsync(url, ct);
@@ -150,6 +155,13 @@ public sealed class BruinApiClient
         using var res = await _http.GetAsync("api/v1/me", ct);
         await ThrowIfProblem(res, ct);
         return (await res.Content.ReadFromJsonAsync<MeResponse>(Json, ct))!;
+    }
+
+    public async Task<DebugLsnResponse> GetDebugLsnAsync(CancellationToken ct = default)
+    {
+        using var res = await _http.GetAsync("api/v1/debug/lsn", ct);
+        await ThrowIfProblem(res, ct);
+        return (await res.Content.ReadFromJsonAsync<DebugLsnResponse>(Json, ct))!;
     }
 
     public async Task<BulkJobErrorsResponse> GetBulkJobErrorsAsync(string id, CancellationToken ct = default)

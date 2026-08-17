@@ -27,10 +27,37 @@
         @Body
     </div>
     <Toaster />
+    <LsnStatusBar />
+    @* Dev smoke button — admin only. Fixed bottom-left, opposite the LSN
+       bar. Opens the DevPanel modal. *@
+    @if (Me.CanDelete)
+    {
+        <button type="button" class="dev-launcher" @onclick="() => _devOpen = true"
+                title="Developer smoke checklist">
+            Dev
+        </button>
+    }
+    @if (_devOpen)
+    {
+        <DevPanel OnClosed="() => _devOpen = false" />
+    }
 </CascadingValue>
+
+<style>
+    .dev-launcher {
+        position: fixed; bottom: 12px; left: 12px; z-index: 40;
+        background: var(--slate-800); color: white;
+        border: 0; border-radius: 6px;
+        padding: 4px 10px; font-size: 11px; font-weight: 500;
+        cursor: pointer; opacity: 0.7;
+        transition: opacity 150ms ease;
+    }
+    .dev-launcher:hover { opacity: 1; }
+</style>
 
 @code {
     private readonly AppActions _appActions = new();
+    private bool _devOpen;
 
     protected override async Task OnInitializedAsync()
     {

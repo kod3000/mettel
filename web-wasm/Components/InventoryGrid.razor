@@ -6,16 +6,27 @@
    the first page on parameter change, appends subsequent pages when the
    user scrolls near the end. Uses Blazor's built-in <Virtualize> for
    windowed rendering — comparable to @tanstack/react-virtual on the
-   React side. *@
+   React side.
 
-<CountDisplay Filtered="_filtered" Total="_total" TookMs="_tookMs" />
+   Columns are dynamic: ColumnPicker toggles visibility, `_visibility`
+   filters both the header and each row. When search matches a row via
+   a hidden field, a small chip surfaces at the row's right edge so the
+   operator can see why the row appeared. *@
+
+<div class="grid-stats-row">
+    <div style="flex:1">
+        <CountDisplay Filtered="_filtered" Total="_total" TookMs="_tookMs" />
+    </div>
+    <ColumnPicker Columns="PickerColumns" Visible="_visibility" VisibleChanged="OnVisibilityChanged" />
+</div>
 
 <div class="grid-wrap">
-    <div class="grid-header">
-        @foreach (var col in Columns)
+    <div class="grid-header" style="grid-template-columns:@GridTemplate();min-width:@MinTableWidth()">
+        @foreach (var col in VisibleColumns())
         {
-            var sorted = Value.Sort == col.Key;
-            <div class="col @(sorted ? "sorted" : "")" @onclick="() => OnSortClick(col)">
+            var sorted = Value.Sort == col.SortKey;
+            <div class="col @(sorted ? "sorted" : "") @(col.SortKey is null ? "no-sort" : "")"
+                 @onclick="() => OnSortClick(col)">
                 @col.Label
                 @if (sorted)
                 {
@@ -37,14 +48,24 @@
         else
         {
             <Virtualize @ref="_virtualize" Items="_rows" ItemSize="32" OverscanCount="10" Context="row">
+                @{
+                    var hiddenHits = HiddenMatchesFor(row);
+                }
                 <div class="grid-row @(row.Id == SelectedId ? "selected" : "")"
+                     style="grid-template-columns:@GridTemplate();min-width:@MinTableWidth();position:relative"
                      @onclick="() => OnRowClick.InvokeAsync(row)">
-                    <div class="mono truncate">@row.ServiceNumber</div>
-                    <div class="truncate">@row.ProductName</div>
-                    <div><span class="badge @row.Status">@row.Status</span></div>
-                    <div class="truncate">@row.ProductCategory</div>
-                    <div class="tabular">@Fmt(row.CreatedAt)</div>
-                    <div class="tabular">@Fmt(row.UpdatedAt)</div>
+                    @foreach (var col in VisibleColumns())
+                    {
+                        <div class="@col.CellCssClass">@RenderCell(row, col.Id)</div>
+                    }
+                    @if (hiddenHits.Count > 0)
+                    {
+                        <span class="hidden-match-chip"
+                              title="@BuildHiddenMatchTooltip(row, hiddenHits)"
+                              @onclick:stopPropagation="true">
+                            matched: @string.Join(", ", hiddenHits)
+                        </span>
+                    }
                 </div>
             </Virtualize>
 
@@ -64,6 +85,24 @@
     </div>
 </div>
 
+<style>
+    .grid-stats-row {
+        display: flex; align-items: center; gap: 12px;
+        padding: 6px 16px; border-bottom: 1px solid var(--slate-100);
+    }
+    .grid-header .col.no-sort { cursor: default; }
+    .hidden-match-chip {
+        position: absolute; right: 8px; top: 50%;
+        transform: translateY(-50%);
+        display: inline-flex; align-items: center; gap: 4px;
+        background: #fffbeb; color: #92400e;
+        border: 1px solid #fde68a; border-radius: 999px;
+        padding: 1px 8px; font-size: 10px; font-weight: 500;
+        box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+        pointer-events: auto;
+    }
+</style>
+
 @code {
     [Parameter, EditorRequired] public BruinApiClient.ListParams Value { get; set; } = default!;
     [Parameter] public EventCallback<BruinApiClient.ListParams> ValueChanged { get; set; }
@@ -81,19 +120,151 @@
     private CancellationTokenSource? _cts;
     private ElementReference _scrollRef;
     private Virtualize<InventoryRow>? _virtualize;
-    // Fingerprint of the last Value we loaded for. On change, we clear
-    // and reload from the top.
     private string _appliedKey = "";
 
-    private static readonly (string? Key, string Label)[] Columns =
+    // Column visibility — in-memory. Persisting to localStorage would need
+    // IJSRuntime interop on init; skipped for scope since a demo browser
+    // typically doesn't refresh mid-session. Default = all on.
+    private Dictionary<string, bool> _visibility = new();
+
+    // Column metadata: id, label, min width, css class for the cell body,
+    // sort key on the server (null = unsortable). One row per grid column.
+    private sealed record Col(
+        string Id, string Label, string Width, string CellCssClass,
+        string? SortKey, bool Required = false);
+
+    private static readonly Col[] AllColumns =
     {
-        ("serviceNumber", "Service #"),
-        ("productName",   "Product"),
-        ("status",        "Status"),
-        (null,            "Category"),   // unsortable server-side
-        ("createdAt",     "Created"),
-        ("updatedAt",     "Updated"),
+        new("serviceNumber",   "Service #",  "minmax(140px, 180px)",           "mono truncate", "serviceNumber"),
+        new("productName",     "Product",    "minmax(220px, 2fr)",             "truncate",      "productName", Required: true),
+        new("productCategory", "Category",   "minmax(100px, 130px)",           "truncate",      null),
+        new("status",          "Status",     "minmax(120px, 140px)",           "",              "status"),
+        new("city",            "City",       "minmax(120px, 160px)",           "truncate",      null),
+        new("state",           "State",      "minmax(60px, 80px)",             "mono",          null),
+        new("address",         "Address",    "minmax(180px, 1.5fr)",           "truncate",      null),
+        new("assignee",        "Assignee",   "minmax(100px, 140px)",           "mono truncate", null),
+        new("createdAt",       "Created",    "minmax(150px, 180px)",           "tabular",       "createdAt"),
+        new("updatedAt",       "Updated",    "minmax(150px, 180px)",           "tabular",       "updatedAt"),
     };
+
+    private static readonly IReadOnlyList<ColumnPicker.ColumnDef> PickerColumns =
+        AllColumns.Select(c => new ColumnPicker.ColumnDef(c.Id, c.Label, c.Required)).ToList();
+
+    // Searchable field wires — mirrors Filters.SearchFields. Notes is
+    // included even though there's no grid column for it, so notes hits
+    // always chip as "matched: notes".
+    private static readonly string[] DefaultSearchFields =
+    {
+        "productName", "serviceNumber", "city", "state", "address", "assignee", "notes",
+    };
+
+    private IEnumerable<Col> VisibleColumns() =>
+        AllColumns.Where(c => !_visibility.TryGetValue(c.Id, out var v) || v);
+
+    private string GridTemplate() =>
+        string.Join(' ', VisibleColumns().Select(c => c.Width));
+
+    private string MinTableWidth()
+    {
+        // Sum of numeric min widths (px) — rough enough for horizontal scroll.
+        int total = 0;
+        foreach (var c in VisibleColumns())
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(c.Width, @"minmax\((\d+)px");
+            total += m.Success ? int.Parse(m.Groups[1].Value) : 180;
+        }
+        return $"{Math.Max(total + 100, 400)}px";
+    }
+
+    private async Task OnVisibilityChanged(Dictionary<string, bool> next)
+    {
+        _visibility = next;
+        StateHasChanged();
+        // Re-render virtualized rows — column count may have changed.
+        if (_virtualize is not null) await _virtualize.RefreshDataAsync();
+    }
+
+    // ---- Cell rendering per column id ---------------------------------
+
+    private RenderFragment RenderCell(InventoryRow row, string colId) => builder =>
+    {
+        switch (colId)
+        {
+            case "serviceNumber":   builder.AddContent(0, row.ServiceNumber); break;
+            case "productName":     builder.AddContent(0, row.ProductName); break;
+            case "productCategory": builder.AddContent(0, row.ProductCategory); break;
+            case "status":
+                builder.OpenElement(0, "span");
+                builder.AddAttribute(1, "class", $"badge {row.Status}");
+                builder.AddContent(2, row.Status);
+                builder.CloseElement();
+                break;
+            case "city":            builder.AddContent(0, row.City ?? "—"); break;
+            case "state":           builder.AddContent(0, row.State ?? "—"); break;
+            case "address":         builder.AddContent(0, row.Address ?? "—"); break;
+            case "assignee":        builder.AddContent(0, row.Assignee ?? "—"); break;
+            case "createdAt":       builder.AddContent(0, Fmt(row.CreatedAt)); break;
+            case "updatedAt":       builder.AddContent(0, Fmt(row.UpdatedAt)); break;
+        }
+    };
+
+    // ---- Hidden-field match hint --------------------------------------
+
+    private List<string> HiddenMatchesFor(InventoryRow row)
+    {
+        var q = (Value.Q ?? "").Trim().ToLowerInvariant();
+        if (q.Length < 2) return new List<string>();
+        var tokens = q.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var searched = Value.Fields is { Count: > 0 } ? Value.Fields : DefaultSearchFields;
+        var hits = new List<string>();
+        foreach (var f in searched)
+        {
+            // Hidden = either the column exists but is toggled off, OR
+            // there's no grid column for this field at all (notes).
+            var hasCol = AllColumns.Any(c => c.Id == f);
+            var visible = hasCol && (!_visibility.TryGetValue(f, out var v) || v);
+            if (visible) continue;
+            var raw = FieldValue(row, f);
+            if (string.IsNullOrEmpty(raw)) continue;
+            var lower = raw.ToLowerInvariant();
+            if (tokens.Any(t => lower.Contains(t))) hits.Add(f);
+        }
+        return hits;
+    }
+
+    private string BuildHiddenMatchTooltip(InventoryRow row, List<string> fields)
+    {
+        var q = (Value.Q ?? "").Trim().ToLowerInvariant();
+        var tokens = q.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var parts = new List<string>();
+        foreach (var f in fields)
+        {
+            var raw = FieldValue(row, f) ?? "";
+            var lower = raw.ToLowerInvariant();
+            var idx = tokens.Select(t => lower.IndexOf(t)).Where(i => i >= 0).DefaultIfEmpty(0).Min();
+            var start = Math.Max(0, idx - 15);
+            var end = Math.Min(raw.Length, idx + 40);
+            var snippet = (start > 0 ? "…" : "") + raw.Substring(start, end - start) + (end < raw.Length ? "…" : "");
+            parts.Add($"{f}: \"{snippet}\"");
+        }
+        return string.Join(" · ", parts);
+    }
+
+    private static string? FieldValue(InventoryRow r, string wire) => wire switch
+    {
+        "productName"     => r.ProductName,
+        "serviceNumber"   => r.ServiceNumber,
+        "productCategory" => r.ProductCategory,
+        "status"          => r.Status,
+        "city"            => r.City,
+        "state"           => r.State,
+        "address"         => r.Address,
+        "assignee"        => r.Assignee,
+        "notes"           => r.Notes,
+        _ => null,
+    };
+
+    // ---- Data loading + scrolling (unchanged from prior revision) -----
 
     protected override async Task OnParametersSetAsync()
     {
@@ -130,7 +301,7 @@
             _total = res.TotalEstimate;
             _tookMs = res.TookMs;
         }
-        catch (OperationCanceledException) { /* swallowed on tenant/filter change */ }
+        catch (OperationCanceledException) { }
         catch (ApiException ex) { _error = ex; }
 
         if (_virtualize is not null) await _virtualize.RefreshDataAsync();
@@ -160,10 +331,6 @@
         }
     }
 
-    // Cheap scroll heuristic: when the user is within ~10 rows of the
-    // bottom, trigger the next keyset page. Blazor's Virtualize also
-    // has an ItemsProvider path but keyset cursors don't map cleanly to
-    // its (startIndex, count) contract.
     private async Task OnScroll()
     {
         if (!_hasMore || _loadingMore) return;
@@ -173,10 +340,10 @@
 
     private sealed record ScrollDims(double Scrolled, double Total);
 
-    private async Task OnSortClick((string? Key, string Label) col)
+    private async Task OnSortClick(Col col)
     {
-        if (col.Key is null) return;
-        var (nextSort, nextDir) = NextSortState(Value.Sort, Value.Dir, col.Key);
+        if (col.SortKey is null) return;
+        var (nextSort, nextDir) = NextSortState(Value.Sort, Value.Dir, col.SortKey);
         await ValueChanged.InvokeAsync(Value with { Sort = nextSort, Dir = nextDir, Cursor = null });
     }
 
@@ -190,7 +357,7 @@
     private static string ParamsKey(BruinApiClient.ListParams p) =>
         string.Join('|',
             p.Q ?? "",
-            Join(p.Status), Join(p.ProductCategory), Join(p.State),
+            Join(p.Fields), Join(p.Status), Join(p.ProductCategory), Join(p.State),
             p.Sort ?? "", p.Dir ?? "",
             p.PageSize?.ToString() ?? "");
 

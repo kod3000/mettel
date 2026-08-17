@@ -15,6 +15,22 @@
         @oninput="OnSearchInput"
         aria-label="Search inventory" />
 
+    @* "Search in" chips — mirror apps/web/src/components/Filters.tsx.
+       Always visible so operators discover them; muted opacity when the
+       query is empty (toggles pre-apply for the next search). *@
+    <fieldset class="search-in-group @(string.IsNullOrWhiteSpace(_q) ? "muted" : "")"
+              title="Restrict the search to specific columns. All-on uses the fast tsvector index; any deselected falls back to per-column ILIKE.">
+        <legend>Search in</legend>
+        @foreach (var f in SearchFields)
+        {
+            var on = ActiveFields().Contains(f.Wire);
+            <button type="button" class="search-in-chip @(on ? "on" : "off")"
+                    title="@f.Title" @onclick="() => ToggleField(f.Wire)">
+                @f.Label
+            </button>
+        }
+    </fieldset>
+
     <FilterGroup Label="Status" Options="Statuses" Selected="Value.Status"
                  OnToggle="s => ToggleStatus(s)" />
 
@@ -46,6 +62,33 @@
     </div>
 </div>
 
+<style>
+    .search-in-group {
+        display: flex; align-items: center; gap: 6px;
+        border: 0; padding: 0; margin: 0;
+        transition: opacity 150ms ease;
+    }
+    .search-in-group.muted { opacity: 0.6; }
+    .search-in-group legend {
+        display: inline; float: none;
+        font-size: 11px; color: var(--slate-500);
+        padding-right: 4px;
+    }
+    .search-in-chip {
+        border-radius: 999px; padding: 2px 8px; font-size: 11px;
+        font-weight: 500; border: 1px solid; cursor: pointer;
+        transition: background 100ms ease;
+    }
+    .search-in-chip.on {
+        background: #e0f2fe; color: #075985; border-color: #7dd3fc;
+    }
+    .search-in-chip.off {
+        background: white; color: var(--slate-400); border-color: var(--slate-200);
+        text-decoration: line-through;
+    }
+    .search-in-chip.off:hover { background: var(--slate-50); }
+</style>
+
 @code {
     [Parameter, EditorRequired] public BruinApiClient.ListParams Value { get; set; } = default!;
     [Parameter] public EventCallback<BruinApiClient.ListParams> ValueChanged { get; set; }
@@ -54,6 +97,34 @@
     private static readonly string[] Statuses   = { "pending", "active", "disconnected" };
     private static readonly string[] Categories = { "voice", "data", "wireless", "other" };
     private static readonly string[] SortKeys   = { "createdAt", "updatedAt", "status", "serviceNumber", "productName" };
+
+    private sealed record SearchField(string Wire, string Label, string Title);
+    private static readonly SearchField[] SearchFields = {
+        new("productName",   "product",  "Match against product name"),
+        new("serviceNumber", "service#", "Match against service number"),
+        new("city",          "city",     "Match against city"),
+        new("state",         "state",    "Match against state"),
+        new("address",       "address",  "Match against address"),
+        new("assignee",      "assignee", "Match against assignee"),
+        new("notes",         "notes",    "Match against notes"),
+    };
+    private static readonly string[] AllFieldWires = SearchFields.Select(f => f.Wire).ToArray();
+
+    // A chip is "on" when its wire name is in the active set. Undefined
+    // Fields (default) = all on (broad tsvector). Toggling any chip off
+    // crystalizes the current all-set into the list.
+    private IReadOnlyCollection<string> ActiveFields()
+        => Value.Fields ?? AllFieldWires;
+
+    private Task ToggleField(string wire)
+    {
+        var current = ActiveFields();
+        var next = new List<string>(current);
+        if (!next.Remove(wire)) next.Add(wire);
+        // If all fields are on, drop the param → API uses the fast tsvector path.
+        var allOn = AllFieldWires.All(next.Contains);
+        return Emit(Value with { Fields = allOn ? null : next, Cursor = null });
+    }
 
     private string _q = "";
     private System.Timers.Timer? _debounce;
@@ -92,7 +163,7 @@
     private Task ClearAsync()
     {
         _q = "";
-        return Emit(Value with { Q = null, Status = null, ProductCategory = null, State = null, Cursor = null });
+        return Emit(Value with { Q = null, Fields = null, Status = null, ProductCategory = null, State = null, Cursor = null });
     }
 
     private static IReadOnlyCollection<string>? Toggle(IReadOnlyCollection<string>? cur, string val)
