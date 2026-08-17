@@ -1,0 +1,358 @@
+@inject BruinApiClient Api
+@inject IHttpClientFactory HttpFactory
+@inject Microsoft.AspNetCore.Components.NavigationManager Nav
+@implements IDisposable
+
+@* Developer smoke checklist. Modal overlay with 11 built-in scenarios
+   (auth, list, CRUD, bulk upload, search, role enforcement) plus any
+   declarative scenarios loaded from /smoke-scenarios.json at open time.
+   Mirrors apps/web/src/components/DevPanel.tsx. Admin-only: the button
+   that opens this panel is gated in MainLayout behind Me.CanDelete. *@
+
+<div class="modal-backdrop" @onclick="OnClose">
+    <div class="dev-panel" @onclick:stopPropagation="true" role="dialog" aria-label="Developer smoke checklist">
+        <header class="dev-header">
+            <div style="flex:1">
+                <h2 style="margin:0;font-size:14px;font-weight:600">Developer smoke checklist</h2>
+                <p style="margin:2px 0 0;font-size:11px;color:var(--slate-500)">
+                    Runs against the live API with the current tenant + role key.
+                    Use after a fresh clone or before a demo to verify each path.
+                </p>
+            </div>
+            <span style="font-size:11px" class="tabular">
+                @if (_passCount > 0) { <span style="color:#047857">✓ @_passCount</span> }
+                @if (_failCount > 0) { <span style="color:#be123c;margin-left:8px">✗ @_failCount</span> }
+            </span>
+            <button type="button" class="btn primary" disabled="@_running" @onclick="RunAllAsync">
+                @(_running ? "Running…" : "Run all")
+            </button>
+            <button type="button" class="btn" @onclick="OnClose">Close</button>
+        </header>
+
+        <div class="dev-body">
+            <table class="dev-table">
+                <thead>
+                    <tr>
+                        <th style="width:32px"></th>
+                        <th style="width:220px">Scenario</th>
+                        <th>Description / last result</th>
+                        <th style="width:60px;text-align:right">ms</th>
+                        <th style="width:60px"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var sc in _scenarios)
+                    {
+                        var r = _results.TryGetValue(sc.Id, out var rr) ? rr : null;
+                        <tr>
+                            <td><span class="dev-chip @ChipClass(r?.Status ?? "idle")">@ChipGlyph(r?.Status ?? "idle")</span></td>
+                            <td class="mono" style="font-size:11px">@sc.Name</td>
+                            <td style="color:var(--slate-600)">@(r?.Detail ?? sc.Description)</td>
+                            <td class="tabular" style="text-align:right;color:var(--slate-500)">@(r?.Ms > 0 ? r.Ms.ToString() : "")</td>
+                            <td style="text-align:right">
+                                <button type="button" class="btn dev-run-btn"
+                                        disabled="@(_running || r?.Status == "running")"
+                                        @onclick="() => RunOneAsync(sc, new Dictionary<string,string>())">
+                                    Run
+                                </button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<style>
+    .dev-panel {
+        max-height: 85vh; width: 100%; max-width: 720px;
+        display: flex; flex-direction: column;
+        background: white; border-radius: 8px;
+        border: 1px solid var(--slate-200);
+        box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+        overflow: hidden;
+    }
+    .dev-header {
+        display: flex; align-items: center; gap: 12px;
+        padding: 12px 16px; border-bottom: 1px solid var(--slate-200);
+    }
+    .dev-body { overflow-y: auto; }
+    .dev-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+    .dev-table thead { position: sticky; top: 0; background: var(--slate-50); text-align: left; }
+    .dev-table th { padding: 8px 12px; font-size: 11px; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.04em; color: var(--slate-500); }
+    .dev-table td { padding: 8px 12px; border-top: 1px solid var(--slate-100); }
+    .dev-chip {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 20px; height: 20px; border-radius: 999px;
+        font-size: 11px; font-weight: 600;
+    }
+    .dev-chip.pass { background: #d1fae5; color: #065f46; }
+    .dev-chip.fail { background: #ffe4e6; color: #9f1239; }
+    .dev-chip.running { background: #fef3c7; color: #92400e; animation: pulse 1s ease-in-out infinite; }
+    .dev-chip.idle { background: var(--slate-100); color: var(--slate-500); }
+    .dev-run-btn { font-size: 11px; padding: 2px 8px; }
+    @@keyframes pulse { 50% { opacity: 0.5; } }
+</style>
+
+@code {
+    [Parameter] public EventCallback OnClosed { get; set; }
+
+    private sealed record Scenario(string Id, string Name, string Description, Func<RunContext, Task<(bool Ok, string Detail)>> Run);
+    private sealed record RunContext(BruinApiClient Api, HttpClient PlainHttp, TenantContext Tenant, Dictionary<string, string> Stash);
+    private sealed record RunResult(string Status, string Detail, int Ms);
+
+    // Declarative scenario loaded from /smoke-scenarios.json — mirrors the
+    // React DevPanel's JsonScenario shape. Method defaults to GET; body
+    // ignored unless method is a mutation.
+    private sealed class JsonScenario
+    {
+        public string Id { get; set; } = "";
+        public string Name { get; set; } = "";
+        public string Description { get; set; } = "";
+        public string? Method { get; set; }
+        public string Path { get; set; } = "";
+        public object? Body { get; set; }
+        public int? ExpectStatus { get; set; }
+        public string? ExpectContains { get; set; }
+    }
+
+    [Inject] private TenantContext Tenant { get; set; } = default!;
+
+    private List<Scenario> _scenarios = new();
+    private Dictionary<string, RunResult> _results = new();
+    private bool _running;
+    private int _passCount => _results.Values.Count(r => r.Status == "pass");
+    private int _failCount => _results.Values.Count(r => r.Status == "fail");
+
+    // Reader-key smoke: derives the reader key from the admin key by the
+    // migration-mandated `_reader` suffix. Mirrors the React DevPanel.
+    private const string AcmeAdminKey = "pickle-Pepper-PETTER-piPEr-picKEd-PEPPERS_acme";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _scenarios = BuiltIns();
+        // Load JSON-declared extras — swallowed on missing/malformed file.
+        try
+        {
+            using var plainHttp = HttpFactory.CreateClient();
+            plainHttp.BaseAddress = new Uri(Nav.BaseUri);
+            var raw = await plainHttp.GetStringAsync("smoke-scenarios.json");
+            var doc = System.Text.Json.JsonSerializer.Deserialize<JsonScenariosDoc>(raw,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (doc?.Scenarios is not null)
+            {
+                _scenarios.AddRange(doc.Scenarios.Select(ScenarioFromJson));
+                StateHasChanged();
+            }
+        }
+        catch { /* file missing or malformed — silent */ }
+    }
+
+    private sealed class JsonScenariosDoc { public List<JsonScenario>? Scenarios { get; set; } }
+
+    private async Task RunAllAsync()
+    {
+        _running = true;
+        _results.Clear();
+        StateHasChanged();
+        var stash = new Dictionary<string, string>();
+        foreach (var sc in _scenarios) await RunOneAsync(sc, stash);
+        _running = false;
+        StateHasChanged();
+    }
+
+    private async Task RunOneAsync(Scenario sc, Dictionary<string, string> stash)
+    {
+        _results[sc.Id] = new RunResult("running", "…", 0);
+        StateHasChanged();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            using var plain = HttpFactory.CreateClient();
+            plain.BaseAddress = new Uri(Nav.BaseUri);
+            var ctx = new RunContext(Api, plain, Tenant, stash);
+            var (ok, detail) = await sc.Run(ctx);
+            sw.Stop();
+            _results[sc.Id] = new RunResult(ok ? "pass" : "fail", detail, (int)sw.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            _results[sc.Id] = new RunResult("fail", ex.Message, (int)sw.ElapsedMilliseconds);
+        }
+        StateHasChanged();
+    }
+
+    private Task OnClose() => OnClosed.InvokeAsync();
+
+    private static string ChipClass(string s) => s;
+    private static string ChipGlyph(string s) => s switch
+    {
+        "pass"    => "✓",
+        "fail"    => "✗",
+        "running" => "…",
+        _         => "·",
+    };
+
+    // ---- Scenario helpers --------------------------------------------
+
+    private static Scenario ScenarioFromJson(JsonScenario js) => new(
+        js.Id, js.Name, js.Description,
+        async ctx =>
+        {
+            var method = new HttpMethod((js.Method ?? "GET").ToUpperInvariant());
+            var req = new HttpRequestMessage(method, js.Path);
+            req.Headers.Add("X-Api-Key", ctx.Tenant.CurrentApiKey);
+            if (js.Body is not null)
+            {
+                req.Content = System.Net.Http.Json.JsonContent.Create(js.Body);
+            }
+            using var res = await ctx.PlainHttp.SendAsync(req);
+            var want = js.ExpectStatus ?? 200;
+            if ((int)res.StatusCode != want)
+                return (false, $"HTTP {(int)res.StatusCode} (want {want})");
+            if (!string.IsNullOrEmpty(js.ExpectContains))
+            {
+                var text = await res.Content.ReadAsStringAsync();
+                if (!text.Contains(js.ExpectContains))
+                    return (false, $"response missing \"{js.ExpectContains}\"");
+                return (true, $"HTTP {(int)res.StatusCode} + contains \"{js.ExpectContains}\"");
+            }
+            return (true, $"HTTP {(int)res.StatusCode}");
+        });
+
+    private List<Scenario> BuiltIns() => new()
+    {
+        new("me", "GET /me", "Auth + role resolution", async ctx =>
+        {
+            var me = await ctx.Api.GetMeAsync();
+            return (!string.IsNullOrEmpty(me.ClientId) && !string.IsNullOrEmpty(me.Role),
+                $"role={me.Role} clientId={me.ClientId[..8]}…");
+        }),
+
+        new("list", "GET /inventory?pageSize=1", "Read path via list handler", async ctx =>
+        {
+            var res = await ctx.Api.ListAsync(new BruinApiClient.ListParams(PageSize: 1));
+            return (true, $"{res.Rows.Count} row · ~{res.TotalEstimate?.Value ?? 0:N0} total");
+        }),
+
+        new("debug-lsn", "GET /debug/lsn", "Primary + replica LSN visibility", async ctx =>
+        {
+            var lsn = await ctx.Api.GetDebugLsnAsync();
+            return (!string.IsNullOrEmpty(lsn.Primary), $"p={lsn.Primary} r={lsn.Replica} lag={lsn.LagBytes}B");
+        }),
+
+        new("search", "Search 'fiber'", "tsvector path exercise", async ctx =>
+        {
+            var res = await ctx.Api.ListAsync(new BruinApiClient.ListParams(Q: "fiber", PageSize: 5));
+            return (res.Rows.Count > 0, $"{res.Rows.Count} matches");
+        }),
+
+        new("search-narrowed", "Search 'boston' fields=city", "Fine-grained scope narrowing", async ctx =>
+        {
+            var res = await ctx.Api.ListAsync(new BruinApiClient.ListParams(
+                Q: "boston", Fields: new[] { "city" }, PageSize: 5));
+            var allBoston = res.Rows.All(r => string.Equals(r.City, "Boston", StringComparison.OrdinalIgnoreCase));
+            return (allBoston && res.Rows.Count > 0, $"{res.Rows.Count} rows, all city=Boston: {allBoston}");
+        }),
+
+        new("create", "POST /inventory (create)", "Round-trip create + stash id", async ctx =>
+        {
+            var sn = $"DEV-SMOKE-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+            var body = new CreateRequest(
+                ServiceNumber: sn, ProductCategory: "voice",
+                ProductName: "Dev smoke row", Status: "pending");
+            var row = await ctx.Api.CreateAsync(body);
+            ctx.Stash["smokeId"] = row.Id;
+            ctx.Stash["smokeRowVersion"] = row.RowVersion.ToString();
+            return (true, $"id={row.Id[..8]}… sn={row.ServiceNumber}");
+        }),
+
+        new("patch", "PATCH /inventory/{id}", "Full-field patch on the created row", async ctx =>
+        {
+            if (!ctx.Stash.TryGetValue("smokeId", out var id))
+                return (false, "no smoke row id (run create first)");
+            var rv = int.Parse(ctx.Stash.GetValueOrDefault("smokeRowVersion", "1"));
+            var patch = new Dictionary<string, object?>
+            {
+                ["rowVersion"] = rv,
+                ["notes"] = "patched by dev smoke",
+            };
+            var row = await ctx.Api.PatchInventoryAsync(id, patch);
+            ctx.Stash["smokeRowVersion"] = row.RowVersion.ToString();
+            return (row.Notes == "patched by dev smoke",
+                $"notes updated · rv {rv} → {row.RowVersion}");
+        }),
+
+        new("delete", "DELETE /inventory/{id} (soft)", "Admin-only soft delete of the smoke row", async ctx =>
+        {
+            if (!ctx.Stash.TryGetValue("smokeId", out var id))
+                return (false, "no smoke row id");
+            await ctx.Api.DeleteInventoryAsync(id);
+            try
+            {
+                await ctx.Api.GetAsync(id);
+                return (false, "GET after delete still returned the row");
+            }
+            catch (ApiException ex) when (ex.StatusCode == 404)
+            {
+                return (true, "row soft-deleted, GET 404");
+            }
+        }),
+
+        new("bulk-good", "POST /bulk-jobs (2-row CSV)", "Multipart upload path", async ctx =>
+        {
+            var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var csv = "serviceNumber,productCategory,productName,status\n"
+                    + $"DEV-BULK-A-{ts},voice,Bulk row A,pending\n"
+                    + $"DEV-BULK-B-{ts},data,Bulk row B,active\n";
+            using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(csv));
+            var accepted = await ctx.Api.PostBulkJobAsync(stream, "dev-smoke.csv", "text/csv", null);
+            return (true, $"accepted jobId={accepted.JobId[..8]}…");
+        }),
+
+        new("bulk-bad-header", "POST /bulk-jobs (bad header)", "Expect job.status=failed with reason", async ctx =>
+        {
+            var csv = "this,is,not,valid\nx,y,z,w\n";
+            using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(csv));
+            var accepted = await ctx.Api.PostBulkJobAsync(stream, "bad-header.csv", "text/csv", null);
+            // Poll up to ~15s for terminal status
+            for (int i = 0; i < 20; i++)
+            {
+                await Task.Delay(750);
+                var snap = await ctx.Api.GetBulkJobAsync(accepted.JobId);
+                if (snap.Status == "failed")
+                {
+                    var errors = await ctx.Api.GetBulkJobErrorsAsync(accepted.JobId);
+                    var first = errors.Errors.FirstOrDefault()?.Reason ?? "";
+                    var ok = System.Text.RegularExpressions.Regex.IsMatch(first, "header", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    return (ok, $"failed: {(first.Length > 80 ? first[..80] : first)}");
+                }
+                if (snap.Status is "completed" or "completedWithErrors")
+                    return (false, $"unexpected terminal: {snap.Status}");
+            }
+            return (false, "timeout waiting for terminal status");
+        }),
+
+        new("reader-403", "Reader key gets 403 on POST", "Role enforcement smoke", async ctx =>
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, "api/v1/inventory")
+            {
+                Content = System.Net.Http.Json.JsonContent.Create(new
+                {
+                    serviceNumber = "DEV-READER-SHOULD-FAIL",
+                    productCategory = "voice",
+                    productName = "should not stick",
+                    status = "pending",
+                }),
+                Headers = { { "X-Api-Key", $"{AcmeAdminKey}_reader" } },
+            };
+            using var res = await ctx.PlainHttp.SendAsync(req);
+            return ((int)res.StatusCode == 403, $"HTTP {(int)res.StatusCode} (want 403)");
+        }),
+    };
+
+    public void Dispose() { }
+}

@@ -1,0 +1,127 @@
+@inject IJSRuntime JS
+@implements IDisposable
+
+@* Cog + checkbox popover that toggles column visibility on the grid.
+   Selection persists to localStorage under a global key so preferences
+   travel with the browser, not the tenant. Required columns render as
+   disabled checkboxes so operators can't clear the grid entirely. *@
+
+<div class="col-picker">
+    <button type="button" class="col-picker-toggle"
+            @onclick="Toggle" title="@(HiddenCount() > 0 ? $"{HiddenCount()} column(s) hidden" : "Choose visible columns")">
+        <span class="cog">⚙</span>
+        @if (HiddenCount() > 0)
+        {
+            <span class="hidden-badge">@HiddenCount()</span>
+        }
+    </button>
+
+    @if (_open)
+    {
+        <div class="col-picker-menu" @onclick:stopPropagation="true">
+            <div class="col-picker-head">
+                <span>Columns</span>
+                <button type="button" class="reset" @onclick="ResetAll">reset</button>
+            </div>
+            <ul>
+                @foreach (var c in Columns)
+                {
+                    var on = IsVisible(c.Id);
+                    var locked = c.Required;
+                    <li>
+                        <label class="@(locked ? "locked" : "")" title="@(locked ? "Required column" : null)">
+                            <input type="checkbox"
+                                   checked="@on"
+                                   disabled="@locked"
+                                   @onchange="() => Toggle(c.Id)" />
+                            <span>@c.Label</span>
+                        </label>
+                    </li>
+                }
+            </ul>
+        </div>
+    }
+</div>
+
+<style>
+    .col-picker { position: relative; }
+    .col-picker-toggle {
+        display: inline-flex; align-items: center; gap: 4px;
+        border: 1px solid var(--slate-300); background: white;
+        border-radius: 6px; padding: 2px 8px; font-size: 11px;
+        color: var(--slate-700); cursor: pointer;
+    }
+    .col-picker-toggle:hover { background: var(--slate-50); }
+    .col-picker-toggle .cog { font-size: 12px; }
+    .hidden-badge {
+        background: var(--slate-100); border-radius: 999px;
+        padding: 0 5px; font-size: 10px; font-weight: 500;
+        color: var(--slate-600);
+    }
+    .col-picker-menu {
+        position: absolute; right: 0; top: 100%; margin-top: 4px;
+        z-index: 20; width: 220px;
+        background: white; border: 1px solid var(--slate-200);
+        border-radius: 6px; padding: 8px;
+        box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+    }
+    .col-picker-head {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 0 4px 6px; border-bottom: 1px solid var(--slate-100);
+    }
+    .col-picker-head span {
+        font-size: 11px; font-weight: 600;
+        text-transform: uppercase; letter-spacing: 0.04em; color: var(--slate-500);
+    }
+    .col-picker-head .reset {
+        background: transparent; border: 0; color: var(--indigo-600);
+        font-size: 11px; cursor: pointer;
+    }
+    .col-picker-head .reset:hover { color: var(--indigo-500); }
+    .col-picker-menu ul { list-style: none; margin: 4px 0 0; padding: 0; }
+    .col-picker-menu li { margin: 0; }
+    .col-picker-menu label {
+        display: flex; align-items: center; gap: 8px;
+        padding: 4px 6px; border-radius: 3px;
+        font-size: 12px; color: var(--slate-700); cursor: pointer;
+    }
+    .col-picker-menu label:hover { background: var(--slate-50); }
+    .col-picker-menu label.locked { cursor: not-allowed; color: var(--slate-400); }
+</style>
+
+@code {
+    public sealed record ColumnDef(string Id, string Label, bool Required = false);
+
+    [Parameter, EditorRequired] public IReadOnlyList<ColumnDef> Columns { get; set; } = Array.Empty<ColumnDef>();
+    [Parameter, EditorRequired] public Dictionary<string, bool> Visible { get; set; } = new();
+    [Parameter] public EventCallback<Dictionary<string, bool>> VisibleChanged { get; set; }
+
+    private bool _open;
+    private DotNetObjectReference<ColumnPicker>? _selfRef;
+
+    protected override void OnInitialized() => _selfRef = DotNetObjectReference.Create(this);
+
+    private void Toggle() { _open = !_open; }
+
+    private bool IsVisible(string id) => !Visible.TryGetValue(id, out var v) || v;
+
+    private int HiddenCount() => Columns.Count(c => Visible.TryGetValue(c.Id, out var v) && !v);
+
+    private async Task Toggle(string id)
+    {
+        var next = new Dictionary<string, bool>(Visible);
+        next[id] = !IsVisible(id);
+        // Force required back on if the caller somehow flipped it.
+        foreach (var c in Columns) if (c.Required) next[c.Id] = true;
+        await VisibleChanged.InvokeAsync(next);
+    }
+
+    private async Task ResetAll()
+    {
+        var next = new Dictionary<string, bool>();
+        foreach (var c in Columns) next[c.Id] = true;
+        await VisibleChanged.InvokeAsync(next);
+    }
+
+    public void Dispose() => _selfRef?.Dispose();
+}

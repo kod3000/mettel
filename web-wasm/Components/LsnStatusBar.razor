@@ -1,0 +1,138 @@
+@inject BruinApiClient Api
+@inject TenantContext Tenant
+@implements IDisposable
+
+@* Small always-on-screen indicator strip that polls /debug/lsn every 2 s.
+   Mirrors apps/web/src/components/LsnStatusBar.tsx. Fixed bottom-right so
+   it never collides with the Dev button (bottom-left). Toggle persisted
+   via localStorage would need JS interop; kept in-memory here for scope
+   — refresh resets to visible. *@
+
+@if (!_visible)
+{
+    <button class="lsn-collapsed" type="button" @onclick="() => Toggle(true)"
+            title="Show LSN status bar">
+        LSN
+    </button>
+}
+else
+{
+    <div class="lsn-bar" role="status" aria-live="off" data-testid="lsn-status-bar">
+        @if (_err is not null)
+        {
+            <span style="color:#be123c">LSN: @_err</span>
+        }
+        else if (_data is not null)
+        {
+            <span title="Primary WAL LSN">
+                <span class="lsn-label">primary</span> @(_data.Primary ?? "—")
+            </span>
+            <span title="Replica replay LSN">
+                <span class="lsn-label">replica</span> @(_data.Replica ?? "—")
+            </span>
+            <span title="@($"byte diff between primary WAL and replica replay ({_data.LagSeconds.ToString("F1")}s wall clock)")"
+                  class="@LagColorClass(_data.LagBytes)">
+                <span class="lsn-label">lag</span> @FormatBytes(_data.LagBytes)
+            </span>
+            @if (!_data.Reachable)
+            {
+                <span style="color:#be123c;font-weight:600">REPLICA DOWN</span>
+            }
+        }
+        else
+        {
+            <span style="color:var(--slate-500)">LSN: loading…</span>
+        }
+        <button type="button" class="lsn-dismiss" @onclick="() => Toggle(false)"
+                title="Hide" aria-label="Hide LSN status bar">✕</button>
+    </div>
+}
+
+<style>
+    .lsn-bar {
+        position: fixed; bottom: 8px; right: 8px; z-index: 40;
+        display: flex; align-items: center; gap: 12px;
+        padding: 6px 12px; border: 1px solid var(--slate-300);
+        border-radius: 6px; background: rgba(255,255,255,0.95);
+        font-size: 11px; font-family: ui-monospace, SFMono-Regular, monospace;
+        color: var(--slate-700);
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    }
+    .lsn-label { color: var(--slate-500); margin-right: 4px; }
+    .lag-ok    { color: #047857; }
+    .lag-warn  { color: #b45309; }
+    .lag-bad   { color: #be123c; font-weight: 600; }
+    .lsn-dismiss {
+        background: transparent; border: 0; cursor: pointer;
+        color: var(--slate-400); padding: 0 2px;
+    }
+    .lsn-dismiss:hover { color: var(--slate-700); }
+    .lsn-collapsed {
+        position: fixed; bottom: 8px; right: 8px; z-index: 40;
+        border: 1px solid var(--slate-300); background: rgba(255,255,255,0.9);
+        border-radius: 6px; padding: 4px 8px; font-size: 11px;
+        color: var(--slate-600); cursor: pointer;
+        box-shadow: 0 2px 4px rgb(0 0 0 / 0.1);
+    }
+    .lsn-collapsed:hover { background: white; }
+</style>
+
+@code {
+    private const int PollMs = 2000;
+
+    private bool _visible = true;
+    private DebugLsnResponse? _data;
+    private string? _err;
+    private CancellationTokenSource? _cts;
+    private Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        _cts = new CancellationTokenSource();
+        _ = LoadOnceAsync();
+        _timer = new Timer(_ => _ = LoadOnceAsync(), null, PollMs, PollMs);
+    }
+
+    private async Task LoadOnceAsync()
+    {
+        if (!_visible) return;
+        try
+        {
+            _data = await Api.GetDebugLsnAsync(_cts?.Token ?? CancellationToken.None);
+            _err = null;
+        }
+        catch (Exception ex)
+        {
+            _err = ex.Message;
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void Toggle(bool on)
+    {
+        _visible = on;
+        if (on) _ = LoadOnceAsync();
+    }
+
+    private static string FormatBytes(long n)
+    {
+        if (n < 1024)              return $"{n}B";
+        if (n < 1024L * 1024)      return $"{n / 1024.0:F1}KB";
+        if (n < 1024L * 1024 * 1024) return $"{n / 1024.0 / 1024.0:F1}MB";
+        return $"{n / 1024.0 / 1024.0 / 1024.0:F2}GB";
+    }
+
+    private static string LagColorClass(long bytes)
+    {
+        if (bytes < 64L * 1024)          return "lag-ok";
+        if (bytes < 8L * 1024 * 1024)    return "lag-warn";
+        return "lag-bad";
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}
