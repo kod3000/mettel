@@ -1,4 +1,5 @@
 @inject BruinApiClient Api
+@inject LocalReplica Replica
 @inject IJSRuntime JS
 @implements IDisposable
 
@@ -17,6 +18,7 @@
     <div style="flex:1">
         <CountDisplay Filtered="_filtered" Total="_total" TookMs="_tookMs" />
     </div>
+    <LocalReplicaChip Mode="_mode" ModeChanged="OnModeChanged" />
     <ColumnPicker Columns="PickerColumns" Visible="_visibility" VisibleChanged="OnVisibilityChanged" />
 </div>
 
@@ -121,6 +123,21 @@
     private ElementReference _scrollRef;
     private Virtualize<InventoryRow>? _virtualize;
     private string _appliedKey = "";
+
+    // "server" | "local" — set by LocalReplicaChip. Local uses SQLite-WASM
+    // for zero-latency filter/sort/search over the hydrated tenant slice;
+    // server hits /api/v1/inventory as before. Local is offset-paginated
+    // (keyset would be overkill for an indexed in-browser DB).
+    private string _mode = "server";
+    private int _localOffset;
+    private long _localFilteredCount;
+
+    private async Task OnModeChanged(string next)
+    {
+        if (_mode == next) return;
+        _mode = next;
+        await ReloadAsync();
+    }
 
     // Column visibility — in-memory. Persisting to localStorage would need
     // IJSRuntime interop on init; skipped for scope since a demo browser
@@ -288,21 +305,44 @@
         _tookMs = null;
         _error = null;
         _loadingMore = false;
+        _localOffset = 0;
+        _localFilteredCount = 0;
         StateHasChanged();
 
         try
         {
-            var res = await Api.ListAsync(Value with { Cursor = null }, ct);
-            if (ct.IsCancellationRequested) return;
-            _rows.AddRange(res.Rows);
-            _nextCursor = res.NextCursor;
-            _hasMore = res.HasMore;
-            _filtered = res.FilteredCount;
-            _total = res.TotalEstimate;
-            _tookMs = res.TookMs;
+            if (UseLocal())
+            {
+                var res = await Replica.QueryListAsync(ToLocalParams(0), ct);
+                if (ct.IsCancellationRequested) return;
+                _rows.AddRange(res.Rows);
+                _localOffset = _rows.Count;
+                _localFilteredCount = res.FilteredCount;
+                _filtered = new CountEnvelope(res.FilteredCount, "exact");
+                _total = new CountEnvelope(res.TotalCount, "exact");
+                _tookMs = res.TookMs;
+                _hasMore = _rows.Count < res.FilteredCount;
+            }
+            else
+            {
+                var res = await Api.ListAsync(Value with { Cursor = null }, ct);
+                if (ct.IsCancellationRequested) return;
+                _rows.AddRange(res.Rows);
+                _nextCursor = res.NextCursor;
+                _hasMore = res.HasMore;
+                _filtered = res.FilteredCount;
+                _total = res.TotalEstimate;
+                _tookMs = res.TookMs;
+            }
         }
         catch (OperationCanceledException) { }
         catch (ApiException ex) { _error = ex; }
+        catch (Exception ex)
+        {
+            // Local path can throw when SQLite isn't up yet — surface it
+            // as a soft error and let the operator flip back to server.
+            _error = new ApiException(new ProblemDetails(null, "Local query failed", 500, ex.Message, null));
+        }
 
         if (_virtualize is not null) await _virtualize.RefreshDataAsync();
         StateHasChanged();
@@ -310,17 +350,31 @@
 
     private async Task LoadMoreAsync()
     {
-        if (_loadingMore || !_hasMore || _nextCursor is null) return;
+        if (_loadingMore || !_hasMore) return;
         _loadingMore = true;
         StateHasChanged();
         try
         {
             var ct = _cts?.Token ?? CancellationToken.None;
-            var res = await Api.ListAsync(Value with { Cursor = _nextCursor }, ct);
-            _rows.AddRange(res.Rows);
-            _nextCursor = res.NextCursor;
-            _hasMore = res.HasMore;
-            _tookMs = res.TookMs;
+            if (UseLocal())
+            {
+                var res = await Replica.QueryListAsync(ToLocalParams(_localOffset), ct);
+                _rows.AddRange(res.Rows);
+                _localOffset = _rows.Count;
+                _localFilteredCount = res.FilteredCount;
+                _filtered = new CountEnvelope(res.FilteredCount, "exact");
+                _tookMs = res.TookMs;
+                _hasMore = _rows.Count < res.FilteredCount;
+            }
+            else
+            {
+                if (_nextCursor is null) return;
+                var res = await Api.ListAsync(Value with { Cursor = _nextCursor }, ct);
+                _rows.AddRange(res.Rows);
+                _nextCursor = res.NextCursor;
+                _hasMore = res.HasMore;
+                _tookMs = res.TookMs;
+            }
         }
         catch (OperationCanceledException) { }
         catch (ApiException ex) { _error = ex; }
@@ -330,6 +384,18 @@
             StateHasChanged();
         }
     }
+
+    private bool UseLocal() => _mode == "local" && Replica.IsReady;
+
+    private LocalReplica.LocalListParams ToLocalParams(int offset) => new(
+        Q: Value.Q,
+        Status: Value.Status,
+        ProductCategory: Value.ProductCategory,
+        State: Value.State,
+        Sort: Value.Sort,
+        Dir: Value.Dir,
+        PageSize: Value.PageSize ?? 100,
+        Offset: offset);
 
     private async Task OnScroll()
     {

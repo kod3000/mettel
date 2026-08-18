@@ -104,6 +104,38 @@ public sealed class ListEndpointTests
         Assert.EndsWith("cursor-stale", type);
     }
 
+    // ---------------------------------------------------------------- (c′)
+    // Narrower version of (c): only the `fields=` search-scope changes, not
+    // status/category/state. Regression guard: `fields` was originally left
+    // out of CursorCodec.FilterHash, so a client toggling search-in chips
+    // mid-scroll silently drifted onto rows from a different filter shape.
+    // Adding `fields` to the hash means this second request must be rejected.
+    [Fact]
+    public async Task Changing_search_fields_mid_pagination_yields_cursor_stale()
+    {
+        await _fx.TruncateInventoryAsync();
+        await _fx.SeedInventoryAsync(_fx.ClientA, 500, seed: 401);
+
+        var client = Client(PostgresFixture.ApiKeyA);
+        // Broad search — no fields= narrows the tsvector match set. Seed
+        // product_name is "Product #N", so `q=product` matches all 500 rows
+        // and page1's nextCursor is guaranteed to be non-null.
+        using var page1 = await client.GetAsync("/api/v1/inventory?pageSize=50&q=product");
+        page1.EnsureSuccessStatusCode();
+        using var d1 = JsonDocument.Parse(await page1.Content.ReadAsStringAsync());
+        var cursor = d1.RootElement.GetProperty("nextCursor").GetString();
+        Assert.False(string.IsNullOrEmpty(cursor));
+
+        // Same q, same paging — but fields=productName narrows the scope. The
+        // row set is a proper subset of page1's, so the cursor is stale.
+        using var page2 = await client.GetAsync(
+            $"/api/v1/inventory?pageSize=50&q=product&fields=productName&cursor={Uri.EscapeDataString(cursor!)}");
+        Assert.Equal(HttpStatusCode.BadRequest, page2.StatusCode);
+        using var problem = JsonDocument.Parse(await page2.Content.ReadAsStringAsync());
+        var type = problem.RootElement.GetProperty("type").GetString();
+        Assert.EndsWith("cursor-stale", type);
+    }
+
     // ---------------------------------------------------------------- (d)
     [Fact]
     public async Task Concurrent_inserts_do_not_skip_pre_existing_rows()

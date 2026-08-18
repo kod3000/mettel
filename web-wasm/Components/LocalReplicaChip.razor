@@ -1,0 +1,191 @@
+@inject LocalReplica Replica
+@inject TenantContext Tenant
+@implements IDisposable
+
+@* Compact status chip + mode toggle for the local SQLite replica. Sits
+   inline in the grid's stats row so a reviewer can flip between server
+   and local reads without leaving the page.
+
+   States:
+     - Not open              → nothing to show (pre-tenant boot)
+     - Open, empty           → "Hydrate" button (kicks off snapshot pull)
+     - Hydrating             → spinner + "Batches: N · Rows: N"
+     - Ready                 → toggle (Server | Local) + row count + age *@
+
+<div class="lr-chip @(_hydrating ? "lr-busy" : "")">
+    @if (!Replica.IsOpen)
+    {
+        <span class="lr-muted">local · idle</span>
+    }
+    else if (!Replica.IsReady && !_hydrating)
+    {
+        <button class="btn btn-mini" @onclick="StartHydrate" title="Populate the local SQLite mirror from the server snapshot feed">
+            Hydrate local
+        </button>
+    }
+    else if (_hydrating)
+    {
+        <span class="lr-spinner"></span>
+        <span>hydrating · @_batches batches · @_rowsThisRun rows</span>
+        <button class="btn btn-mini btn-ghost" @onclick="CancelHydrate">Cancel</button>
+    }
+    else
+    {
+        <div class="lr-seg" role="group" aria-label="Read source">
+            <button class="@(Mode == "server" ? "lr-seg-on" : "")"
+                    @onclick='() => SetMode("server")'>Server</button>
+            <button class="@(Mode == "local"  ? "lr-seg-on" : "")"
+                    @onclick='() => SetMode("local")'>Local</button>
+        </div>
+        <span class="lr-meta">
+            @Replica.RowCount.ToString("N0") rows · synced @AgeLabel()
+        </span>
+        <button class="btn btn-mini btn-ghost" @onclick="StartHydrate"
+                title="Pull any rows updated since the last sync">Sync</button>
+    }
+</div>
+
+<style>
+    .lr-chip {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 4px 8px; border-radius: 6px;
+        background: #f8fafc; border: 1px solid var(--slate-200);
+        font-size: 12px; color: var(--slate-700);
+    }
+    .lr-chip.lr-busy { background: #fef9c3; border-color: #fde68a; }
+    .lr-muted { color: var(--slate-400); font-style: italic; }
+    .lr-meta { color: var(--slate-500); font-variant-numeric: tabular-nums; }
+    .lr-seg {
+        display: inline-flex; border: 1px solid var(--slate-300);
+        border-radius: 5px; overflow: hidden;
+    }
+    .lr-seg button {
+        background: transparent; border: 0; padding: 2px 8px;
+        font-size: 11px; cursor: pointer; color: var(--slate-600);
+    }
+    .lr-seg button.lr-seg-on {
+        background: var(--slate-800); color: white; font-weight: 500;
+    }
+    .btn-mini { padding: 2px 8px; font-size: 11px; }
+    .btn-ghost { background: transparent; border: 1px solid transparent; color: var(--slate-500); }
+    .btn-ghost:hover { border-color: var(--slate-300); }
+    .lr-spinner {
+        width: 10px; height: 10px; border-radius: 50%;
+        border: 2px solid var(--slate-300); border-top-color: var(--slate-700);
+        animation: lr-spin 0.7s linear infinite;
+    }
+    @@keyframes lr-spin { to { transform: rotate(360deg); } }
+</style>
+
+@code {
+    [Parameter] public string Mode { get; set; } = "server";
+    [Parameter] public EventCallback<string> ModeChanged { get; set; }
+
+    private bool _hydrating;
+    private int _batches;
+    private long _rowsThisRun;
+    private CancellationTokenSource? _cts;
+
+    protected override void OnInitialized()
+    {
+        Replica.Changed += OnReplicaChanged;
+        // Kick off open on first render (needs to be async, defer).
+        _ = EnsureOpenAsync();
+    }
+
+    private async Task EnsureOpenAsync()
+    {
+        var cid = ResolveClientId();
+        if (cid is Guid g && Replica.ClientId != g)
+        {
+            try { await Replica.OpenAsync(g); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"LocalReplica open failed: {ex.Message}");
+            }
+        }
+    }
+
+    // /me hasn't landed yet when this component first mounts, so derive
+    // client id from the tenant label. We namespace the local DB by this
+    // value; when /me eventually lands the router won't need it — the
+    // server still owns tenant auth.
+    private Guid? ResolveClientId()
+    {
+        // Deterministic pseudo-Guid from the tenant slug so a repeat visit
+        // reuses the same OPFS file. Not a security boundary — the server
+        // still gates every request by X-Api-Key.
+        var slug = Tenant.Current.Id;
+        var bytes = new byte[16];
+        var src = System.Text.Encoding.UTF8.GetBytes(slug);
+        Array.Copy(src, bytes, Math.Min(src.Length, 16));
+        return new Guid(bytes);
+    }
+
+    private void OnReplicaChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task StartHydrate()
+    {
+        await EnsureOpenAsync();
+        if (_hydrating) return;
+        _hydrating = true;
+        _batches = 0;
+        _rowsThisRun = 0;
+        _cts = new CancellationTokenSource();
+        StateHasChanged();
+
+        var progress = new Progress<HydrationProgress>(p =>
+        {
+            _batches = p.Batches;
+            _rowsThisRun = p.RowsThisRun;
+            InvokeAsync(StateHasChanged);
+        });
+
+        try
+        {
+            await Replica.HydrateAsync(progress, _cts.Token);
+            // On first successful hydrate, flip the caller into local mode
+            // automatically — that's the whole point of the panel.
+            if (Mode != "local" && Replica.IsReady)
+            {
+                await ModeChanged.InvokeAsync("local");
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Hydrate failed: {ex.Message}");
+        }
+        finally
+        {
+            _hydrating = false;
+            _cts = null;
+            StateHasChanged();
+        }
+    }
+
+    private void CancelHydrate() { _cts?.Cancel(); }
+
+    private async Task SetMode(string next)
+    {
+        if (Mode == next) return;
+        await ModeChanged.InvokeAsync(next);
+    }
+
+    private string AgeLabel()
+    {
+        var since = Replica.LastSyncAt;
+        if (since is null) return "—";
+        var s = (int)(DateTimeOffset.UtcNow - since.Value).TotalSeconds;
+        if (s < 5)   return "just now";
+        if (s < 60)  return $"{s}s ago";
+        if (s < 3600) return $"{s / 60}m ago";
+        return $"{s / 3600}h ago";
+    }
+
+    public void Dispose()
+    {
+        Replica.Changed -= OnReplicaChanged;
+        _cts?.Cancel();
+    }
+}

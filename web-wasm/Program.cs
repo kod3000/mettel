@@ -35,9 +35,22 @@ builder.Services.AddSingleton<LsnStore>();
 builder.Services.AddSingleton<ToastService>();
 builder.Services.AddSingleton<ErrorReporter>();
 builder.Services.AddSingleton<MeService>();
+builder.Services.AddSingleton<LocalReplica>();
 builder.Services.AddTransient<ApiKeyHandler>();
 
 builder.Services.AddHttpClient<BruinApiClient>(c => c.BaseAddress = baseAddress)
     .AddHttpMessageHandler<ApiKeyHandler>();
 
-await builder.Build().RunAsync();
+var host = builder.Build();
+
+// Wire the write-through cache. BruinApiClient can't take LocalReplica as
+// a constructor dep (LocalReplica already depends on BruinApiClient), so
+// we resolve both here and hand the client a fire-and-forget callback.
+{
+    var api = host.Services.GetRequiredService<BruinApiClient>();
+    var replica = host.Services.GetRequiredService<LocalReplica>();
+    api.OnRowMutated = row => { _ = replica.UpsertAsync(row); };
+    api.OnRowDeleted = id  => { _ = replica.TombstoneAsync(id); };
+}
+
+await host.RunAsync();

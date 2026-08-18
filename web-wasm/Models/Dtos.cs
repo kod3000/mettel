@@ -37,6 +37,31 @@ public sealed record ListResponse(
     [property: JsonPropertyName("filteredCount")] CountEnvelope? FilteredCount,
     [property: JsonPropertyName("tookMs")]        long TookMs);
 
+// Snapshot row for local-replica hydration. Same fields as InventoryRow
+// plus DeletedAt so the local mirror can tombstone rows.
+public sealed record SnapshotRow(
+    [property: JsonPropertyName("id")]              string Id,
+    [property: JsonPropertyName("serviceNumber")]   string ServiceNumber,
+    [property: JsonPropertyName("productCategory")] string ProductCategory,
+    [property: JsonPropertyName("productName")]     string ProductName,
+    [property: JsonPropertyName("status")]          string Status,
+    [property: JsonPropertyName("city")]            string? City,
+    [property: JsonPropertyName("state")]           string? State,
+    [property: JsonPropertyName("address")]         string? Address,
+    [property: JsonPropertyName("assignee")]        string? Assignee,
+    [property: JsonPropertyName("notes")]           string? Notes,
+    [property: JsonPropertyName("createdAt")]       DateTimeOffset CreatedAt,
+    [property: JsonPropertyName("updatedAt")]       DateTimeOffset UpdatedAt,
+    [property: JsonPropertyName("rowVersion")]      int RowVersion,
+    [property: JsonPropertyName("deletedAt")]       DateTimeOffset? DeletedAt);
+
+public sealed record SnapshotResponse(
+    [property: JsonPropertyName("rows")]        IReadOnlyList<SnapshotRow> Rows,
+    [property: JsonPropertyName("nextSince")]   DateTimeOffset? NextSince,
+    [property: JsonPropertyName("nextSinceId")] string? NextSinceId,
+    [property: JsonPropertyName("hasMore")]     bool HasMore,
+    [property: JsonPropertyName("tookMs")]      long TookMs);
+
 public sealed record StatusPatch(
     [property: JsonPropertyName("status")]     string Status,
     [property: JsonPropertyName("rowVersion")] int RowVersion);

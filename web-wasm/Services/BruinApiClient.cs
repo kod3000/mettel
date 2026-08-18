@@ -18,6 +18,15 @@ public sealed class BruinApiClient
 
     private readonly HttpClient _http;
 
+    // Set by Program.cs after the service graph is built (LocalReplica also
+    // depends on BruinApiClient, so a constructor cycle isn't safe). Every
+    // successful mutation flows through here so the local mirror stays hot
+    // without a server round-trip on the next read. Nullable — the field is
+    // wired only when the WASM app is running; tests that new up BruinApiClient
+    // directly leave it alone.
+    public Action<InventoryRow>? OnRowMutated { get; set; }
+    public Action<string>? OnRowDeleted { get; set; }
+
     public BruinApiClient(HttpClient http) => _http = http;
 
     // ---- Inventory list (keyset-paginated) ------------------------------
@@ -55,6 +64,25 @@ public sealed class BruinApiClient
         return (await res.Content.ReadFromJsonAsync<ListResponse>(Json, ct))!;
     }
 
+    // Snapshot feed for local-replica hydration + delta sync. Cursor is the
+    // pair (since, sinceId) from the previous response's Next* fields; both
+    // null on the first call means "start from the beginning of the tenant."
+    public async Task<SnapshotResponse> SnapshotAsync(
+        DateTimeOffset? since, string? sinceId, int? limit, CancellationToken ct = default)
+    {
+        var qs = HttpUtility.ParseQueryString(string.Empty);
+        // Round-trip `since` as ISO-8601 so the server's DateTimeOffset
+        // model binder accepts it verbatim.
+        if (since.HasValue) qs["since"] = since.Value.ToString("O");
+        if (!string.IsNullOrEmpty(sinceId)) qs["sinceId"] = sinceId;
+        if (limit.HasValue) qs["limit"] = limit.Value.ToString();
+
+        var url = $"api/v1/inventory/snapshot?{qs}";
+        using var res = await _http.GetAsync(url, ct);
+        await ThrowIfProblem(res, ct);
+        return (await res.Content.ReadFromJsonAsync<SnapshotResponse>(Json, ct))!;
+    }
+
     public async Task<InventoryRow> GetAsync(string id, CancellationToken ct = default)
     {
         using var res = await _http.GetAsync($"api/v1/inventory/{Uri.EscapeDataString(id)}", ct);
@@ -68,14 +96,24 @@ public sealed class BruinApiClient
         using var res = await _http.PatchAsJsonAsync(
             $"api/v1/inventory/{Uri.EscapeDataString(id)}/status", body, Json, ct);
         await ThrowIfProblem(res, ct);
-        return (await res.Content.ReadFromJsonAsync<StatusChangeResponse>(Json, ct))!;
+        var payload = (await res.Content.ReadFromJsonAsync<StatusChangeResponse>(Json, ct))!;
+        // Status patch returns only the changed fields — refetch the full
+        // row so the local mirror stays consistent (avoids partial updates
+        // that would show stale sibling fields on next local read).
+        if (OnRowMutated is not null)
+        {
+            try { OnRowMutated(await GetAsync(id, ct)); } catch { /* best effort */ }
+        }
+        return payload;
     }
 
     public async Task<InventoryRow> CreateAsync(CreateRequest body, CancellationToken ct = default)
     {
         using var res = await _http.PostAsJsonAsync("api/v1/inventory", body, Json, ct);
         await ThrowIfProblem(res, ct);
-        return (await res.Content.ReadFromJsonAsync<InventoryRow>(Json, ct))!;
+        var row = (await res.Content.ReadFromJsonAsync<InventoryRow>(Json, ct))!;
+        OnRowMutated?.Invoke(row);
+        return row;
     }
 
     // Arbitrary-field patch. Body is IReadOnlyDictionary<string, object?> so
@@ -89,13 +127,16 @@ public sealed class BruinApiClient
         using var res = await _http.PatchAsJsonAsync(
             $"api/v1/inventory/{Uri.EscapeDataString(id)}", patch, Json, ct);
         await ThrowIfProblem(res, ct);
-        return (await res.Content.ReadFromJsonAsync<InventoryRow>(Json, ct))!;
+        var row = (await res.Content.ReadFromJsonAsync<InventoryRow>(Json, ct))!;
+        OnRowMutated?.Invoke(row);
+        return row;
     }
 
     public async Task DeleteInventoryAsync(string id, CancellationToken ct = default)
     {
         using var res = await _http.DeleteAsync($"api/v1/inventory/{Uri.EscapeDataString(id)}", ct);
         await ThrowIfProblem(res, ct);
+        OnRowDeleted?.Invoke(id);
     }
 
     // ---- Saved views ----------------------------------------------------
