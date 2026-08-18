@@ -170,6 +170,17 @@ function AppShellInner(props: {
                 <div className="flex-1">
                     <h1 className="text-base font-semibold tracking-tight">Bruin Inventory Grid</h1>
                     <p className="text-xs text-slate-500">MetTel Bruin Platform — fun-times</p>
+                    {canDelete && (
+                        <a
+                            href="https://auth.mettel.exercise.dany.codes/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-indigo-600 hover:text-indigo-500 hover:underline"
+                            title="Manage API keys for your tenant"
+                        >
+                            Manage your account keys ↗
+                        </a>
+                    )}
                 </div>
                 <GpuToggle value={gpuHover} onChange={setGpuHover} />
                 <ClientPicker

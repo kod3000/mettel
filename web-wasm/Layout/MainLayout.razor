@@ -15,6 +15,15 @@
             <div>
                 <h1>Bruin Inventory Grid</h1>
                 <div class="subtitle">MetTel Bruin Platform — Blazor WebAssembly twin</div>
+                @if (Me.CanDelete)
+                {
+                    <a class="account-keys-link"
+                       href="https://auth.mettel.exercise.dany.codes/"
+                       target="_blank" rel="noopener noreferrer"
+                       title="Manage API keys for your tenant">
+                        Manage your account keys ↗
+                    </a>
+                }
             </div>
             <div class="spacer"></div>
             <ClientPicker />
