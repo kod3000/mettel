@@ -62,32 +62,6 @@
     </div>
 </div>
 
-<style>
-    .search-in-group {
-        display: flex; align-items: center; gap: 6px;
-        border: 0; padding: 0; margin: 0;
-        transition: opacity 150ms ease;
-    }
-    .search-in-group.muted { opacity: 0.6; }
-    .search-in-group legend {
-        display: inline; float: none;
-        font-size: 11px; color: var(--slate-500);
-        padding-right: 4px;
-    }
-    .search-in-chip {
-        border-radius: 999px; padding: 2px 8px; font-size: 11px;
-        font-weight: 500; border: 1px solid; cursor: pointer;
-        transition: background 100ms ease;
-    }
-    .search-in-chip.on {
-        background: #e0f2fe; color: #075985; border-color: #7dd3fc;
-    }
-    .search-in-chip.off {
-        background: white; color: var(--slate-400); border-color: var(--slate-200);
-        text-decoration: line-through;
-    }
-    .search-in-chip.off:hover { background: var(--slate-50); }
-</style>
 
 @code {
     [Parameter, EditorRequired] public BruinApiClient.ListParams Value { get; set; } = default!;

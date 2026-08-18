@@ -88,32 +88,6 @@
     }
 </div>
 
-<style>
-    .bulk-panel {
-        display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-        padding: 6px 16px; background: white;
-        border-bottom: 1px solid var(--slate-200); font-size: 11px;
-    }
-    .bulk-file { font-size: 11px; }
-    .bulk-file::file-selector-button {
-        margin-right: 6px; border: 0; border-radius: 4px;
-        background: var(--slate-100); color: var(--slate-700);
-        font-size: 11px; padding: 2px 8px; font-weight: 500; cursor: pointer;
-    }
-    .bulk-file::file-selector-button:hover { background: var(--slate-200); }
-    .bulk-progress {
-        margin-left: auto; display: flex; align-items: center; gap: 10px;
-        color: var(--slate-600);
-    }
-    .bulk-progress .filename { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .bulk-progress .bar { width: 160px; height: 8px; background: var(--slate-100); border-radius: 999px; overflow: hidden; }
-    .bulk-progress .bar-inner { height: 100%; transition: width 200ms ease; background: var(--indigo-500); }
-    .bulk-progress .bar-inner.indeterminate {
-        width: 40%; background: linear-gradient(90deg, transparent, var(--indigo-500), transparent);
-        animation: slide 1400ms linear infinite;
-    }
-    @@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
-</style>
 
 @code {
     private enum Phase { Idle, Uploading, Streaming, Polling, Done, Error }

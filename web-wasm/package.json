@@ -1,0 +1,13 @@
+{
+  "name": "bruin-web-wasm-css",
+  "private": true,
+  "description": "Tailwind build for the Blazor WASM twin. Output is committed to wwwroot/css/app.css so `dotnet publish` does not need Node.",
+  "scripts": {
+    "build:css": "tailwindcss -i ./styles/input.css -o ./wwwroot/css/app.css --minify",
+    "watch:css": "tailwindcss -i ./styles/input.css -o ./wwwroot/css/app.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.11",
+    "tailwindcss": "^4.1.11"
+  }
+}

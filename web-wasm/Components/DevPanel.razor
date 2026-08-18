@@ -64,47 +64,6 @@
     </div>
 </div>
 
-<style>
-    /* Full-screen dim overlay + centered dialog. Without the fixed
-       positioning the panel drops in-flow at the very end of the app
-       shell and lands below the fold — appearing as if the Dev button
-       did nothing when it actually opened the panel off-screen. */
-    .modal-backdrop {
-        position: fixed; inset: 0; z-index: 60;
-        background: rgba(15, 23, 42, 0.4);
-        display: flex; align-items: center; justify-content: center;
-        padding: 16px;
-    }
-    .dev-panel {
-        max-height: 85vh; width: 100%; max-width: 720px;
-        display: flex; flex-direction: column;
-        background: white; border-radius: 8px;
-        border: 1px solid var(--slate-200);
-        box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
-        overflow: hidden;
-    }
-    .dev-header {
-        display: flex; align-items: center; gap: 12px;
-        padding: 12px 16px; border-bottom: 1px solid var(--slate-200);
-    }
-    .dev-body { overflow-y: auto; }
-    .dev-table { width: 100%; font-size: 12px; border-collapse: collapse; }
-    .dev-table thead { position: sticky; top: 0; background: var(--slate-50); text-align: left; }
-    .dev-table th { padding: 8px 12px; font-size: 11px; font-weight: 600;
-        text-transform: uppercase; letter-spacing: 0.04em; color: var(--slate-500); }
-    .dev-table td { padding: 8px 12px; border-top: 1px solid var(--slate-100); }
-    .dev-chip {
-        display: inline-flex; align-items: center; justify-content: center;
-        width: 20px; height: 20px; border-radius: 999px;
-        font-size: 11px; font-weight: 600;
-    }
-    .dev-chip.pass { background: #d1fae5; color: #065f46; }
-    .dev-chip.fail { background: #ffe4e6; color: #9f1239; }
-    .dev-chip.running { background: #fef3c7; color: #92400e; animation: pulse 1s ease-in-out infinite; }
-    .dev-chip.idle { background: var(--slate-100); color: var(--slate-500); }
-    .dev-run-btn { font-size: 11px; padding: 2px 8px; }
-    @@keyframes pulse { 50% { opacity: 0.5; } }
-</style>
 
 @code {
     [Parameter] public EventCallback OnClosed { get; set; }

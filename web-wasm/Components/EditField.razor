@@ -19,11 +19,6 @@
     }
 </div>
 
-<style>
-    .edit-block input { width: 100%; padding: 4px 8px; font-size: 13px;
-        border: 1px solid var(--slate-300); border-radius: 6px; background: white; }
-    .edit-block input:read-only { background: var(--slate-100); color: var(--slate-500); }
-</style>
 
 @code {
     [Parameter, EditorRequired] public string Label { get; set; } = "";

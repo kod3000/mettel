@@ -6,11 +6,11 @@
    Layout order mirrors the React SPA. Everything below the topbar is
    inside a @key'd wrapper so a tenant flip tears down state cleanly. *@
 
-<div @key="new { Tenant.Current.Id, Tenant.CurrentRole }" style="display:flex;flex-direction:column;flex:1;min-height:0">
+<div @key="new { Tenant.Current.Id, Tenant.CurrentRole }" class="flex min-h-0 flex-1 flex-col">
     <SavedViewsBar Params="_params" OnApply="OnParamsChange" />
     <BulkUploadPanel />
     <Filters Value="_params" ValueChanged="OnParamsChange" />
-    <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+    <div class="flex min-h-0 flex-1 flex-col">
         <InventoryGrid
             Value="_params"
             ValueChanged="OnParamsChange"

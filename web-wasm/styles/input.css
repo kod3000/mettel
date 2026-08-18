@@ -1,0 +1,288 @@
+@import "tailwindcss";
+
+/* Scan Razor + the boot HTML so utility classes in markup survive minify. */
+@source "../**/*.{razor,html}";
+
+/*
+  Tailwind v4 design system for the Blazor WASM twin.
+
+  Semantic class names are kept (btn, drawer, chip, …) so Blazor's dynamic
+  class concatenations (`btn @(kind)`, `badge @_row.Status`) stay purge-safe.
+  Implementation is @apply of the same slate/indigo scale the React SPA uses.
+*/
+
+/* Bridge leftover inline `var(--slate-*)` styles onto Tailwind's palette. */
+:root {
+    --slate-50: theme(--color-slate-50);
+    --slate-100: theme(--color-slate-100);
+    --slate-200: theme(--color-slate-200);
+    --slate-300: theme(--color-slate-300);
+    --slate-400: theme(--color-slate-400);
+    --slate-500: theme(--color-slate-500);
+    --slate-600: theme(--color-slate-600);
+    --slate-700: theme(--color-slate-700);
+    --slate-800: theme(--color-slate-800);
+    --slate-900: theme(--color-slate-900);
+    --indigo-500: theme(--color-indigo-500);
+    --indigo-600: theme(--color-indigo-600);
+    --indigo-700: theme(--color-indigo-700);
+    --amber-50: theme(--color-amber-50);
+    --amber-200: theme(--color-amber-200);
+    --amber-700: theme(--color-amber-700);
+    --amber-800: theme(--color-amber-800);
+    --emerald-100: theme(--color-emerald-100);
+    --emerald-200: theme(--color-emerald-200);
+    --emerald-700: theme(--color-emerald-700);
+    --emerald-800: theme(--color-emerald-800);
+    --rose-50: theme(--color-rose-50);
+    --rose-100: theme(--color-rose-100);
+    --rose-200: theme(--color-rose-200);
+    --rose-300: theme(--color-rose-300);
+    --rose-500: theme(--color-rose-500);
+    --rose-600: theme(--color-rose-600);
+    --rose-700: theme(--color-rose-700);
+    --rose-800: theme(--color-rose-800);
+}
+
+@layer base {
+    html,
+    body {
+        @apply m-0 p-0 h-full bg-slate-50 text-slate-900 text-[14px] leading-snug antialiased;
+        font-family: theme(fontFamily.sans);
+        color-scheme: light;
+        overscroll-behavior: none;
+    }
+
+    #app {
+        @apply flex h-full flex-col;
+    }
+}
+
+/* Boot spinner — shown until Blazor mounts. */
+.boot {
+    @apply flex h-screen flex-col items-center justify-center gap-3 text-slate-600;
+}
+.boot-spinner {
+    @apply h-7 w-7 animate-spin rounded-full border-[3px] border-slate-200 border-t-indigo-500;
+}
+.boot-label {
+    @apply text-xs tracking-[0.1em] uppercase;
+}
+
+#blazor-error-ui {
+    @apply fixed right-0 bottom-0 left-0 z-100 border-t border-red-300 bg-red-50 px-4 py-2.5 text-[13px] text-red-800;
+}
+#blazor-error-ui .dismiss {
+    @apply float-right cursor-pointer;
+}
+
+@layer components {
+    .app-shell { @apply flex h-full flex-col; }
+
+    .topbar { @apply flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-3 shadow-sm; }
+    .topbar h1 { @apply m-0 text-[15px] font-semibold tracking-tight; }
+    .topbar .subtitle { @apply mt-0.5 text-[11px] text-slate-500; }
+    .topbar .spacer { @apply flex-1; }
+
+    .btn {
+        @apply inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-[13px] font-medium text-slate-800 no-underline transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50;
+    }
+    .btn.primary { @apply border-indigo-600 bg-indigo-600 text-white hover:bg-indigo-500; }
+    .btn.danger { @apply border-rose-300 bg-white text-rose-700 hover:bg-rose-50; }
+    .btn.ok { @apply border-emerald-200 text-emerald-700 hover:bg-emerald-100; }
+    .btn-mini { @apply px-2 py-0.5 text-[11px]; }
+    .btn-ghost { @apply border-transparent bg-transparent text-slate-500 hover:border-slate-300; }
+
+    .select,
+    .input {
+        @apply h-[30px] rounded-md border border-slate-300 bg-white px-2.5 text-[13px] text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20;
+    }
+
+    .filters { @apply flex flex-wrap items-center gap-2.5 border-b border-slate-200 bg-white px-4 py-2.5; }
+    .filters .search { @apply min-w-[220px] flex-1; }
+
+    .chip { @apply inline-flex cursor-pointer items-center gap-1 rounded-full border border-slate-300 bg-white px-2.5 py-0.5 text-[11px] font-semibold tracking-wide text-slate-700 select-none; }
+    .chip.on { @apply border-indigo-600 bg-indigo-600 text-white; }
+
+    .count-line { @apply flex items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 py-1.5 text-xs text-slate-500; }
+    .count-line .filtered { @apply font-semibold text-slate-800; }
+
+    .grid-wrap { @apply flex min-h-0 w-full flex-1 flex-col bg-white; }
+    .grid-header,
+    .grid-row { @apply box-border grid w-full min-w-[900px] items-center gap-x-4 px-4; }
+    .grid-header { @apply sticky top-0 z-2 h-[34px] border-b border-slate-200 bg-slate-50 text-[11px] tracking-wider text-slate-500 uppercase select-none; }
+    .grid-header .col { @apply cursor-pointer; }
+    .grid-header .col.sorted { @apply text-slate-800; }
+    .grid-header .col.no-sort { @apply cursor-default; }
+    .grid-scroll { @apply w-full flex-1 overflow-auto; }
+    .grid-row { @apply h-8 cursor-pointer border-b border-slate-100 text-[13px] text-slate-800 hover:bg-slate-50; }
+    .grid-row.selected { @apply bg-indigo-50; }
+    .grid-stats-row { @apply flex items-center gap-3 border-b border-slate-100 px-4 py-1.5; }
+
+    .mono { @apply font-mono; }
+    .tabular { @apply tabular-nums; }
+
+    .badge { @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold; }
+    .badge.pending { @apply bg-amber-100 text-amber-800 shadow-[inset_0_0_0_1px_var(--color-amber-200)]; }
+    .badge.active { @apply bg-emerald-100 text-emerald-800 shadow-[inset_0_0_0_1px_var(--color-emerald-200)]; }
+    .badge.disconnected { @apply bg-rose-100 text-rose-800 shadow-[inset_0_0_0_1px_var(--color-rose-200)]; }
+
+    .drawer-backdrop { @apply fixed inset-0 z-30 bg-slate-900/30; }
+    .drawer { @apply fixed top-0 right-0 bottom-0 flex w-full max-w-[440px] flex-col border-l border-slate-200 bg-white shadow-xl; }
+    .drawer-header { @apply flex items-start gap-3 border-b border-slate-200 px-4 py-3; }
+    .drawer-header .eyebrow,
+    .eyebrow { @apply text-[11px] tracking-wider text-slate-500 uppercase; }
+    .drawer-header .title,
+    .title { @apply text-sm font-semibold; }
+    .drawer-body { @apply flex flex-1 flex-col gap-3.5 overflow-y-auto p-4; }
+    .drawer-field { @apply grid grid-cols-[110px_1fr] items-start gap-3; }
+    .drawer-field .label { @apply pt-0.5 text-[11px] tracking-wider text-slate-500 uppercase; }
+    .drawer-actions { @apply border-t border-slate-200 pt-3.5; }
+    .drawer-row-actions { @apply mt-3 flex flex-wrap gap-2 border-t border-slate-200 pt-3; }
+
+    .close-x { @apply cursor-pointer rounded-md border-0 bg-transparent p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700; }
+
+    .recovery { @apply flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800; }
+    .recovery .spinner { @apply h-3.5 w-3.5 animate-spin rounded-full border-2 border-amber-700/25 border-t-amber-700; }
+
+    .err-box { @apply rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-[13px] text-rose-800; }
+
+    .sort-ind { @apply ml-1 inline-block text-slate-500; }
+    .grid-header .col.sorted .sort-ind { @apply text-slate-800; }
+
+    .picker-group { @apply flex items-center gap-3; }
+    .picker-label { @apply inline-flex items-center gap-1.5 text-xs text-slate-600; }
+    .role-admin { @apply border-indigo-300 bg-indigo-50 text-indigo-800; }
+    .role-worker { @apply border-sky-300 bg-sky-50 text-sky-800; }
+    .role-reader { @apply border-slate-300 bg-slate-100 text-slate-600; }
+
+    .search-in-group { @apply m-0 flex items-center gap-1.5 border-0 p-0 transition-opacity; }
+    .search-in-group.muted { @apply opacity-60; }
+    .search-in-group legend { @apply float-none inline pr-1 text-[11px] text-slate-500; }
+    .search-in-chip { @apply cursor-pointer rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors; }
+    .search-in-chip.on { @apply border-sky-300 bg-sky-100 text-sky-800; }
+    .search-in-chip.off { @apply border-slate-200 bg-white text-slate-400 line-through hover:bg-slate-50; }
+
+    .lsn-bar { @apply fixed right-2 bottom-2 z-40 flex items-center gap-3 rounded-md border border-slate-300 bg-white/95 px-3 py-1.5 font-mono text-[11px] text-slate-700 shadow-md; }
+    .lsn-label { @apply mr-1 text-slate-500; }
+    .lag-ok { @apply text-emerald-700; }
+    .lag-warn { @apply text-amber-700; }
+    .lag-bad { @apply font-semibold text-rose-700; }
+    .lsn-dismiss { @apply cursor-pointer border-0 bg-transparent px-0.5 text-slate-400 hover:text-slate-700; }
+    .lsn-collapsed,
+    .dev-launcher {
+        @apply fixed bottom-3 z-40 cursor-pointer rounded-md border-0 bg-indigo-700 px-3.5 py-1.5 text-xs font-semibold tracking-wider text-white uppercase shadow-md transition hover:-translate-y-px hover:shadow-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500;
+    }
+    .lsn-collapsed { @apply right-3; }
+    .dev-launcher { @apply left-3; }
+
+    .saved-views { @apply flex flex-wrap items-center gap-1.5 border-b border-slate-200 bg-slate-50 px-4 py-1.5 text-[11px]; }
+    .saved-chip { @apply inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-px; }
+    .saved-name { @apply cursor-pointer border-0 bg-transparent p-0 font-medium text-slate-700 hover:text-indigo-600; }
+    .saved-del { @apply cursor-pointer border-0 bg-transparent p-0 text-slate-400 hover:text-rose-500; }
+
+    .lr-chip { @apply inline-flex items-center gap-2 rounded-md border border-transparent px-2 py-1 text-xs text-slate-700 transition-colors; }
+    .lr-chip.lr-mode-server { @apply border-blue-200 bg-blue-50; }
+    .lr-chip.lr-mode-local { @apply border-emerald-200 bg-emerald-50; }
+    .lr-chip.lr-busy { @apply border-amber-200 bg-amber-100; }
+    .lr-muted { @apply text-slate-400 italic; }
+    .lr-meta { @apply tabular-nums text-slate-500; }
+    .lr-seg { @apply inline-flex overflow-hidden rounded border border-slate-300; }
+    .lr-seg button { @apply cursor-pointer border-0 bg-transparent px-2.5 py-0.5 text-[11px] font-medium tracking-wide text-slate-600 hover:bg-slate-900/5 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-600; }
+    .lr-seg .lr-seg-server.lr-seg-on { @apply bg-blue-600 text-white shadow-[inset_0_-2px_0_#1d4ed8]; }
+    .lr-seg .lr-seg-local.lr-seg-on { @apply bg-emerald-500 text-white shadow-[inset_0_-2px_0_#059669]; }
+    .lr-spinner { @apply h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700; }
+
+    .col-picker { @apply relative; }
+    .col-picker-toggle { @apply inline-flex cursor-pointer items-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50; }
+    .col-picker-toggle .cog { @apply text-xs; }
+    .hidden-badge { @apply rounded-full bg-slate-100 px-1.5 text-[10px] font-medium text-slate-600; }
+    .col-picker-menu { @apply absolute top-full right-0 z-20 mt-1 w-60 rounded-md border border-slate-200 bg-white p-2 shadow-lg; }
+    .col-picker-head { @apply flex items-center justify-between border-b border-slate-100 px-1 pb-1.5; }
+    .col-picker-head span { @apply text-[11px] font-semibold tracking-wide text-slate-500 uppercase; }
+    .col-picker-head .reset { @apply cursor-pointer border-0 bg-transparent text-[11px] text-indigo-600 hover:text-indigo-500; }
+    .col-picker-hint { @apply px-1.5 pt-1 pb-0.5 text-[10px] text-slate-400; }
+    .col-picker-hint .grip { @apply text-slate-500; }
+    .col-picker-menu ul { @apply mt-1 mb-0 list-none p-0; }
+    .col-picker-menu li { @apply m-0 flex items-center gap-1 rounded border border-transparent transition-colors; }
+    .col-picker-menu li.drag-over { @apply border-indigo-200 bg-indigo-50 shadow-[inset_0_2px_0_#4338ca]; }
+    .col-picker-menu li.dragging { @apply opacity-35; }
+    .col-picker-menu li .grip { @apply cursor-grab px-0.5 text-xs text-slate-400 select-none; }
+    .col-picker-menu li:active .grip { @apply cursor-grabbing; }
+    .col-picker-menu label { @apply flex flex-1 cursor-pointer items-center gap-2 rounded-sm px-1.5 py-1 text-xs text-slate-700 hover:bg-slate-50; }
+    .col-picker-menu label.locked { @apply cursor-not-allowed text-slate-400; }
+
+    .local-slice-hint { @apply m-4 flex flex-wrap items-center gap-2.5 rounded-md border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-[13px] text-slate-700; }
+    .local-slice-hint strong { @apply text-emerald-800; }
+    .hidden-match-chip { @apply pointer-events-auto absolute top-1/2 right-2 inline-flex -translate-y-1/2 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-px text-[10px] font-medium text-amber-800 shadow-sm; }
+
+    .edit-form { @apply flex flex-col gap-2.5; }
+    .edit-block label { @apply mb-1 block text-[11px] tracking-wide text-slate-500 uppercase; }
+    .edit-block select,
+    .edit-block textarea,
+    .edit-block input { @apply w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-[13px]; }
+    .edit-block select:disabled,
+    .edit-block textarea:disabled,
+    .edit-block input:read-only { @apply bg-slate-100 text-slate-500; }
+    .ro-hint { @apply ml-1 font-normal text-slate-400 italic normal-case; }
+    .ferr { @apply mt-1 text-[11px] text-rose-700; }
+
+    .modal-backdrop { @apply fixed inset-0 z-60 flex items-center justify-center bg-slate-900/40 p-4; }
+    .modal { @apply w-full max-w-[400px] rounded-lg border border-slate-200 bg-white p-4 text-[13px] shadow-2xl; }
+
+    .bulk-panel { @apply flex flex-wrap items-center gap-2.5 border-b border-slate-200 bg-white px-4 py-1.5 text-[11px]; }
+    .bulk-file { @apply text-[11px]; }
+    .bulk-file::file-selector-button { @apply mr-1.5 cursor-pointer rounded border-0 bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700 hover:bg-slate-200; }
+    .bulk-progress { @apply ml-auto flex items-center gap-2.5 text-slate-600; }
+    .bulk-progress .filename { @apply max-w-[220px] truncate; }
+    .bulk-progress .bar { @apply h-2 w-40 overflow-hidden rounded-full bg-slate-100; }
+    .bulk-progress .bar-inner { @apply h-full bg-indigo-500 transition-[width] duration-200; }
+    .bulk-progress .bar-inner.indeterminate {
+        width: 40%;
+        background: linear-gradient(90deg, transparent, var(--color-indigo-500), transparent);
+        animation: slide 1400ms linear infinite;
+    }
+
+    .dev-panel { @apply flex max-h-[85vh] w-full max-w-[720px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl; }
+    .dev-header { @apply flex items-center gap-3 border-b border-slate-200 px-4 py-3; }
+    .dev-body { @apply overflow-y-auto; }
+    .dev-table { @apply w-full border-collapse text-xs; }
+    .dev-table thead { @apply sticky top-0 bg-slate-50 text-left; }
+    .dev-table th { @apply px-3 py-2 text-[11px] font-semibold tracking-wide text-slate-500 uppercase; }
+    .dev-table td { @apply border-t border-slate-100 px-3 py-2; }
+    .dev-chip { @apply inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold; }
+    .dev-chip.pass { @apply bg-emerald-100 text-emerald-800; }
+    .dev-chip.fail { @apply bg-rose-100 text-rose-800; }
+    .dev-chip.running { @apply animate-pulse bg-amber-100 text-amber-800; }
+    .dev-chip.idle { @apply bg-slate-100 text-slate-500; }
+    .dev-run-btn { @apply px-2 py-0.5 text-[11px]; }
+
+    .apikey,
+    .codeblock { @apply flex-1 overflow-hidden rounded border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-[11px] text-ellipsis whitespace-nowrap select-all; }
+    .codeblock { @apply block flex-none; }
+    .endpoint { @apply overflow-hidden rounded-md border border-slate-200 bg-white; }
+    .endpoint-head { @apply flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-2.5 py-1.5; }
+    .endpoint-body { @apply px-2.5 py-2; }
+    .method { @apply rounded-sm px-1.5 py-px font-mono text-[10px] font-semibold; }
+    .method.get { @apply bg-emerald-100 text-emerald-800; }
+    .method.post { @apply bg-indigo-100 text-indigo-800; }
+    .method.patch { @apply bg-amber-100 text-amber-800; }
+    .snippet { @apply mt-1.5 mb-0 overflow-x-auto rounded bg-slate-900 px-2.5 py-2 font-mono text-[10.5px] leading-normal whitespace-pre text-slate-200; }
+    .filter-table { @apply w-full border-collapse text-[11px]; }
+    .filter-table td { @apply border-b border-slate-100 px-1.5 py-1 align-top; }
+    .filter-table td:first-child { @apply w-[130px]; }
+
+    .toast-region { @apply pointer-events-none fixed top-4 right-4 z-50 flex max-w-[420px] flex-col gap-2; }
+    .toast { @apply pointer-events-auto flex items-start gap-3 rounded-md border px-3 py-2 text-[13px] leading-snug shadow-lg; }
+    .toast-error { @apply border-rose-300 bg-rose-50 text-red-900; }
+    .toast-info { @apply border-slate-300 bg-white text-slate-900; }
+    .toast-msg { @apply flex-1 break-words whitespace-pre-wrap; }
+    .toast-dismiss { @apply shrink-0 cursor-pointer rounded-sm border-0 bg-transparent px-1.5 py-0.5 text-xs font-medium; }
+    .toast-error .toast-dismiss { @apply text-rose-700 hover:bg-rose-100; }
+    .toast-info .toast-dismiss { @apply text-slate-500 hover:bg-slate-100; }
+}
+
+@keyframes slide {
+    from { transform: translateX(-100%); }
+    to   { transform: translateX(300%); }
+}

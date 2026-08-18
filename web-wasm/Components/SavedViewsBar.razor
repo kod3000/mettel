@@ -51,22 +51,6 @@
     }
 </div>
 
-<style>
-    .saved-views {
-        display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-        padding: 6px 16px; background: var(--slate-50);
-        border-bottom: 1px solid var(--slate-200); font-size: 11px;
-    }
-    .saved-chip {
-        display: inline-flex; align-items: center; gap: 4px;
-        background: white; border: 1px solid var(--slate-200);
-        border-radius: 999px; padding: 1px 8px;
-    }
-    .saved-name { background: none; border: none; padding: 0; font-weight: 500; color: var(--slate-700); cursor: pointer; }
-    .saved-name:hover { color: var(--indigo-600); }
-    .saved-del  { background: none; border: none; padding: 0; color: var(--slate-400); cursor: pointer; }
-    .saved-del:hover { color: var(--rose-500); }
-</style>
 
 @code {
     [Parameter, EditorRequired] public BruinApiClient.ListParams Params { get; set; } = default!;

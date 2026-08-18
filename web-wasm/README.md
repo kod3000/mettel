@@ -45,6 +45,21 @@ PATCH round-trip. That's what this twin is here to measure.
 - The API container running locally (`make up` from the repo root)
   or reachable at whatever `ApiBaseUrl` is set to.
 
+## Styles (Tailwind v4)
+
+Same slate/indigo scale as `apps/web`. Source is `styles/input.css`;
+the built file is committed at `wwwroot/css/app.css` so `dotnet publish`
+does not need Node.
+
+```sh
+cd web-wasm && npm install && npm run watch:css
+# or from the repo root:
+make wasm-css
+```
+
+Semantic class names (`btn`, `drawer`, `chip`) stay so Blazor's dynamic
+concatenations remain purge-safe. Implementation is `@apply`.
+
 ## Local dev
 
 ```sh
@@ -116,7 +131,8 @@ web-wasm/
     ApiException.cs
   wwwroot/
     index.html               # Blazor shell + inline boot spinner
-    css/app.css              # Hand-written CSS (no Tailwind — keeps payload honest)
+    styles/input.css         # Tailwind v4 source
+    css/app.css              # built Tailwind bundle (committed, `make wasm-css`)
     js/scroll.js             # Single-purpose scroll metrics helper
     appsettings.json         # ApiBaseUrl = "" (same origin) in prod
     appsettings.Development.json  # ApiBaseUrl = "http://localhost:8081" in dev

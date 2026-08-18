@@ -98,36 +98,6 @@
     </aside>
 </div>
 
-<style>
-    .apikey, .codeblock {
-        flex: 1; font-family: ui-monospace, monospace; font-size: 11px;
-        background: var(--slate-50); border: 1px solid var(--slate-200);
-        border-radius: 4px; padding: 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        user-select: all;
-    }
-    .codeblock { display: block; flex: initial; }
-    .endpoint { border: 1px solid var(--slate-200); border-radius: 6px; overflow: hidden; background: white; }
-    .endpoint-head {
-        display: flex; align-items: center; gap: 8px; padding: 6px 10px;
-        background: var(--slate-50); border-bottom: 1px solid var(--slate-200);
-    }
-    .endpoint-body { padding: 8px 10px; }
-    .method {
-        font-family: ui-monospace, monospace; font-size: 10px; font-weight: 600;
-        padding: 1px 6px; border-radius: 3px;
-    }
-    .method.get   { background: var(--emerald-100); color: var(--emerald-800); }
-    .method.post  { background: #e0e7ff; color: #3730a3; }
-    .method.patch { background: #fef3c7; color: var(--amber-800); }
-    .snippet {
-        margin: 6px 0 0 0; padding: 8px 10px; background: #0f172a; color: #e2e8f0;
-        font-family: ui-monospace, monospace; font-size: 10.5px; line-height: 1.5;
-        border-radius: 4px; overflow-x: auto; white-space: pre;
-    }
-    .filter-table { width: 100%; font-size: 11px; border-collapse: collapse; }
-    .filter-table td { padding: 4px 6px; vertical-align: top; border-bottom: 1px solid var(--slate-100); }
-    .filter-table td:first-child { width: 130px; }
-</style>
 
 @code {
     [Parameter] public EventCallback OnClosed { get; set; }

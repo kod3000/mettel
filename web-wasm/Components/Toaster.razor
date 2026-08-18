@@ -21,31 +21,6 @@
     </div>
 }
 
-<style>
-    .toast-region {
-        position: fixed; top: 16px; right: 16px; z-index: 50;
-        display: flex; flex-direction: column; gap: 8px;
-        max-width: 420px; pointer-events: none;
-    }
-    .toast {
-        pointer-events: auto;
-        display: flex; align-items: flex-start; gap: 12px;
-        padding: 8px 12px; border-radius: 6px; border: 1px solid;
-        box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
-        font-size: 13px; line-height: 1.35;
-    }
-    .toast-error { background: var(--rose-50); border-color: #fda4af; color: #7f1d1d; }
-    .toast-info  { background: white; border-color: var(--slate-300); color: var(--slate-900); }
-    .toast-msg { flex: 1; white-space: pre-wrap; word-break: break-word; }
-    .toast-dismiss {
-        flex-shrink: 0; background: transparent; border: 0; cursor: pointer;
-        padding: 2px 6px; border-radius: 3px; font-size: 12px; font-weight: 500;
-    }
-    .toast-error .toast-dismiss { color: #be123c; }
-    .toast-error .toast-dismiss:hover { background: var(--rose-100); }
-    .toast-info  .toast-dismiss { color: var(--slate-500); }
-    .toast-info  .toast-dismiss:hover { background: var(--slate-100); }
-</style>
 
 @code {
     protected override void OnInitialized() => Toasts.OnChanged += HandleChanged;

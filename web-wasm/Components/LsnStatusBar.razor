@@ -48,44 +48,6 @@ else
     </div>
 }
 
-<style>
-    .lsn-bar {
-        position: fixed; bottom: 8px; right: 8px; z-index: 40;
-        display: flex; align-items: center; gap: 12px;
-        padding: 6px 12px; border: 1px solid var(--slate-300);
-        border-radius: 6px; background: rgba(255,255,255,0.95);
-        font-size: 11px; font-family: ui-monospace, SFMono-Regular, monospace;
-        color: var(--slate-700);
-        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-    }
-    .lsn-label { color: var(--slate-500); margin-right: 4px; }
-    .lag-ok    { color: #047857; }
-    .lag-warn  { color: #b45309; }
-    .lag-bad   { color: #be123c; font-weight: 600; }
-    .lsn-dismiss {
-        background: transparent; border: 0; cursor: pointer;
-        color: var(--slate-400); padding: 0 2px;
-    }
-    .lsn-dismiss:hover { color: var(--slate-700); }
-    /* Matches .dev-launcher (MainLayout.razor) so both bottom-corner
-       pills read as the same class of affordance — indigo filled,
-       uppercase, shadow, lift on hover. */
-    .lsn-collapsed {
-        position: fixed; bottom: 12px; right: 12px; z-index: 40;
-        background: #4338ca; color: white;
-        border: 0; border-radius: 6px;
-        padding: 6px 14px; font-size: 12px; font-weight: 600;
-        letter-spacing: 0.04em; text-transform: uppercase;
-        cursor: pointer; opacity: 1;
-        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.15), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-        transition: transform 120ms ease, box-shadow 120ms ease;
-    }
-    .lsn-collapsed:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 6px 12px -2px rgb(0 0 0 / 0.2);
-    }
-    .lsn-collapsed:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
-</style>
 
 @code {
     private const int PollMs = 2000;
