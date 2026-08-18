@@ -41,14 +41,17 @@ public sealed class BulkJobRunner : BackgroundService
         _log.LogInformation("BulkJobRunner started");
         while (!ct.IsCancellationRequested)
         {
+            NpgsqlConnection? lease = null;
             try
             {
-                var job = await ClaimNextJobAsync(ct);
-                if (job is null)
+                var claim = await ClaimNextJobAsync(ct);
+                if (claim is null)
                 {
                     await Task.Delay(PollDelayMs, ct);
                     continue;
                 }
+                var (job, held) = claim.Value;
+                lease = held;
                 _log.LogInformation("processing bulk job {JobId} file={FileName}", job.Id, job.FileName);
                 await ProcessJobAsync(job, ct);
             }
@@ -58,32 +61,72 @@ public sealed class BulkJobRunner : BackgroundService
                 _log.LogError(ex, "worker loop error");
                 try { await Task.Delay(2_000, ct); } catch { }
             }
+            finally
+            {
+                // Releasing the lease connection releases its session-scoped
+                // advisory lock — see ClaimNextJobAsync for why that's the
+                // safety mechanism that lets us claim both `queued` and
+                // `processing` without two live workers racing on one job.
+                if (lease is not null) await lease.DisposeAsync();
+            }
         }
     }
 
     // ---- Claim: single UPDATE that both selects and marks processing ---
-    // We use a CTE with SKIP LOCKED so N workers pick distinct jobs.
-    private async Task<Job?> ClaimNextJobAsync(CancellationToken ct)
+    // We claim from both `queued` and `processing`. The former is the
+    // normal case; the latter is the crash-resume case (worker A dies
+    // mid-chunk, worker B picks up where `processed_rows` left off — a
+    // documented design promise, test-covered by
+    // Resume_after_crash_yields_identical_success_count).
+    //
+    // The safety property "at most one live worker per job" is guaranteed
+    // by a session-scoped `pg_try_advisory_lock` held on the returned
+    // connection for the entire ProcessJobAsync scope. If worker A is
+    // actively processing job X, worker B's claim query skips X because
+    // the advisory lock evaluates to false. If worker A crashes, its
+    // session dies and the lock releases automatically — no reaper cron
+    // needed, no `locked_until` column.
+    //
+    // The advisory-lock check lives in the outer WHERE so Postgres can
+    // filter at scan time; combined with the FOR UPDATE SKIP LOCKED on
+    // the CTE candidate, two workers ticking simultaneously each pick
+    // distinct jobs.
+    private async Task<(Job Job, NpgsqlConnection Lease)?> ClaimNextJobAsync(CancellationToken ct)
     {
-        await using var conn = new NpgsqlConnection(_primaryConn);
+        var conn = new NpgsqlConnection(_primaryConn);
         await conn.OpenAsync(ct);
-        return await conn.QuerySingleOrDefaultAsync<Job>(new CommandDefinition(@"
-            WITH picked AS (
-                SELECT id
-                FROM public.bulk_job
-                WHERE status IN ('queued','processing')
-                ORDER BY created_at
-                FOR UPDATE SKIP LOCKED
-                LIMIT 1
-            )
-            UPDATE public.bulk_job b
-            SET status = 'processing',
-                started_at = COALESCE(started_at, now())
-            FROM picked
-            WHERE b.id = picked.id
-            RETURNING b.id AS Id, b.client_id AS ClientId, b.file_path AS FilePath,
-                      b.file_name AS FileName, b.processed_rows AS ProcessedRows",
-            cancellationToken: ct));
+        try
+        {
+            var job = await conn.QuerySingleOrDefaultAsync<Job>(new CommandDefinition(@"
+                WITH picked AS (
+                    SELECT id
+                    FROM public.bulk_job
+                    WHERE status IN ('queued','processing')
+                      AND pg_try_advisory_lock(hashtext('bulk_job:' || id::text))
+                    ORDER BY created_at
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE public.bulk_job b
+                SET status = 'processing',
+                    started_at = COALESCE(started_at, now())
+                FROM picked
+                WHERE b.id = picked.id
+                RETURNING b.id AS Id, b.client_id AS ClientId, b.file_path AS FilePath,
+                          b.file_name AS FileName, b.processed_rows AS ProcessedRows",
+                cancellationToken: ct));
+            if (job is null)
+            {
+                await conn.DisposeAsync();
+                return null;
+            }
+            return (job, conn);
+        }
+        catch
+        {
+            await conn.DisposeAsync();
+            throw;
+        }
     }
 
     private sealed class Job

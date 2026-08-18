@@ -62,4 +62,17 @@ public static class Problem
             Status = StatusCodes.Status409Conflict,
             Detail = detail,
         });
+
+    // RFC 7231 §6.5.11. Kept distinct from BadRequest so oversize uploads
+    // don't share the 400 slot with validation failures — clients that
+    // switch on status code (rather than problem slug) can single out the
+    // "your file is too big" case and prompt a retry with chunked upload.
+    public static IResult PayloadTooLarge(string? detail = null)
+        => Results.Problem(new ProblemDetails
+        {
+            Type = ErrorSlugs.TypeUri(ErrorSlugs.PayloadTooLarge),
+            Title = "Payload too large",
+            Status = StatusCodes.Status413PayloadTooLarge,
+            Detail = detail,
+        });
 }

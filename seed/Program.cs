@@ -190,6 +190,24 @@ static async Task<List<(Guid Id, string Name, int Weight)>> SeedTenants(string c
         cmd.Parameters.AddWithValue("n", name);
         cmd.Parameters.AddWithValue("k", apiKey);
         await cmd.ExecuteNonQueryAsync();
+
+        // Seed matching api_key rows (admin + derived worker/reader). The
+        // AddRolesAndFieldPolicy migration only backfills from existing
+        // `client` rows, so if this seeder runs against a freshly-migrated
+        // volume (empty `client`) the migration inserts nothing and demo
+        // roles come up unusable. Filling api_key here keeps them in sync.
+        await using var keyCmd = c.CreateCommand();
+        keyCmd.CommandText = @"
+            INSERT INTO public.api_key (id, client_id, key, role, label, created_at)
+            VALUES
+                (gen_random_uuid(), @cid, @k,             'admin',  'seed admin key',  now()),
+                (gen_random_uuid(), @cid, @k || '_worker','worker', 'seed worker key', now()),
+                (gen_random_uuid(), @cid, @k || '_reader','reader', 'seed reader key', now())
+            ON CONFLICT (key) DO NOTHING;";
+        keyCmd.Parameters.AddWithValue("cid", id);
+        keyCmd.Parameters.AddWithValue("k", apiKey);
+        await keyCmd.ExecuteNonQueryAsync();
+
         list.Add((id, name, weight));
     }
     return list;

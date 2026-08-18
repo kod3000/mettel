@@ -64,8 +64,7 @@ public static class BulkJobEndpoints
                 "Unsupported media type", "Expected multipart/form-data.");
 
         if (ctx.Request.ContentLength is long len && len > MaxFileBytes)
-            return Problem.BadRequest(ErrorSlugs.PayloadTooLarge,
-                "Payload too large", $"Max upload is {MaxFileBytes / (1024 * 1024)} MB.");
+            return Problem.PayloadTooLarge($"Max upload is {MaxFileBytes / (1024 * 1024)} MB.");
 
         var form = await ctx.Request.ReadFormAsync(ct);
         var file = form.Files.GetFile("file") ?? form.Files.FirstOrDefault();

@@ -257,19 +257,5 @@ static async Task<(bool ok, string? error)> PingAsync(string conn)
 
 public sealed record DbEndpoints(string Primary, string Replica);
 
-// Phase 0 placeholder — real BulkJobRunner arrives in Phase 10.
-public sealed class WorkerHeartbeat(ILogger<WorkerHeartbeat> log) : BackgroundService
-{
-    protected override async Task ExecuteAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            log.LogInformation("worker heartbeat (Phase 0 stub)");
-            try { await Task.Delay(TimeSpan.FromSeconds(15), ct); }
-            catch (TaskCanceledException) { }
-        }
-    }
-}
-
 // Exposed for WebApplicationFactory<Program> in the test project.
 public partial class Program;
