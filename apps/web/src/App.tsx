@@ -178,6 +178,15 @@ function AppShellInner(props: {
                     onTenantChange={onTenantChange}
                     onRoleChange={onRoleChange}
                 />
+                <a
+                    href="https://wasm.mettel.exercise.dany.codes/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    title="Open the Blazor WebAssembly twin in a new tab"
+                >
+                    Try the WebAssembly version ↗
+                </a>
                 <button
                     type="button"
                     onClick={() => setApiRefOpen(true)}

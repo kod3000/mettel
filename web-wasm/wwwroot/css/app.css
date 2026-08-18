@@ -89,6 +89,7 @@ html, body {
     padding: 6px 12px; border-radius: 6px; border: 1px solid var(--slate-300);
     background: white; color: var(--slate-800);
     font-size: 13px; font-weight: 500; cursor: pointer;
+    text-decoration: none;
     transition: background-color 120ms ease, border-color 120ms ease;
 }
 .btn:hover { background: var(--slate-50); }
