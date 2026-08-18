@@ -228,21 +228,23 @@
     {
         var local = Replica.RowCount.ToString("N0");
         var server = Replica.ServerRowsHint;
+        var persist = Replica.IsPersistent ? " · persistent" : " · in-memory";
         // Only annotate as "recent slice" when the local mirror is smaller
-        // than the tenant total — otherwise we've hydrated everything and
-        // the qualifier would be misleading.
+        // than the tenant total — otherwise we've hydrated everything.
         if (server is long total && Replica.RowCount < total)
-            return $"{local} of {total:N0} · recent";
-        return $"{local} rows";
+            return $"{local} of {total:N0} · recent{persist}";
+        return $"{local} rows{persist}";
     }
 
     private string SliceTooltip()
     {
-        var server = Replica.ServerRowsHint;
-        if (server is long total && Replica.RowCount < total)
-            return "Local mirror holds the most-recently-updated rows. " +
-                   "Filters and search run against this slice only.";
-        return "Local mirror covers the entire tenant.";
+        var scope = Replica.ServerRowsHint is long total && Replica.RowCount < total
+            ? "Local mirror holds the most-recently-updated rows. Filters and search run against this slice only."
+            : "Local mirror covers the entire tenant.";
+        var persist = Replica.IsPersistent
+            ? "Persisted to OPFS — survives page reload."
+            : "In-memory only — clears on reload. Cross-origin isolation (COOP/COEP) not detected.";
+        return scope + " " + persist;
     }
 
     private string AgeLabel()

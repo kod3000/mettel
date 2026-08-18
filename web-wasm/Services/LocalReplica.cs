@@ -45,11 +45,13 @@ public sealed class LocalReplica
     private long _rowCount;
     private DateTimeOffset? _lastSyncAt;
 
-    // Cap the local slice. In-memory SQLite (OPFS unavailable) tops out
-    // around 500 MB of WASM heap; ~100k rows × ~400 B leaves headroom for
-    // indexes, JS marshalling churn, and Blazor GC. Callers can raise this
-    // when OPFS SAH-pool is confirmed active (persists to disk instead).
-    public const int DefaultMaxRows = 100_000;
+    // Cap the local slice. With OPFS SAH-pool active the DB lives on
+    // disk (not WASM heap) so the ceiling rises considerably; 250k
+    // hydrates in ~30s on a warm cache and covers Beacon entirely (1.25M
+    // × 20% recent). In-memory fallback still fits since 250k × ~400 B
+    // = ~100 MB of WASM heap — comfortable inside Blazor's 4 GB ceiling.
+    // Callers can override per HydrateAsync call.
+    public const int DefaultMaxRows = 250_000;
 
     // Optional server-total hint, set by the grid off its most recent
     // ListResponse.totalEstimate. Powers the "N of M · recent" chip label
@@ -76,6 +78,12 @@ public sealed class LocalReplica
     public DateTimeOffset? LastSyncAt => _lastSyncAt;
     public Guid? ClientId => _clientId;
 
+    // "opfs" | "memdb" | "unknown" — set on OpenAsync from the JS side's
+    // actual VFS choice. Powers the chip label so the operator knows
+    // whether the mirror survives a reload.
+    public string BackingMode { get; private set; } = "unknown";
+    public bool IsPersistent => BackingMode == "opfs";
+
     // Signal for the UI. Fires on hydration start/progress/complete and
     // on write-through upserts so the grid can re-query.
     public event Action? Changed;
@@ -92,7 +100,10 @@ public sealed class LocalReplica
         // polluting another's mirror, and lets us wipe a single tenant.
         _dbName = $"bruin-{clientId:N}.db";
 
-        await _js.InvokeAsync<JsonElement>("bruinDb.open", ct, _dbName);
+        var openInfo = await _js.InvokeAsync<JsonElement>("bruinDb.open", ct, _dbName);
+        BackingMode = openInfo.TryGetProperty("mode", out var m) && m.ValueKind == JsonValueKind.String
+            ? m.GetString() ?? "unknown"
+            : "unknown";
         await _js.InvokeVoidAsync("bruinDb.exec", ct, _dbName, EnsureSchemaSql);
 
         // Restore counters from what's already on disk. First open of a

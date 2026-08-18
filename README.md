@@ -31,14 +31,29 @@ make seed     # generates 5,000,000 inventory rows across 3 tenants (~90 s)
 
 ## Seeded API keys
 
-Each tenant has a fixed API key — the frontend defaults to Acme and carries
-a client picker so a reviewer can swap tenants without editing anything.
+Each tenant has an **admin** key (below) plus derived **worker** and **reader**
+keys — the frontend defaults to Acme + admin and carries client + role pickers
+so a reviewer can swap without editing anything.
 
-| Tenant | Rows (~) | `X-Api-Key` |
+| Tenant | Rows (~) | Admin `X-Api-Key` |
 |---|---:|---|
 | Acme Telecom | 3 500 000 | `pickle-Pepper-PETTER-piPEr-picKEd-PEPPERS_acme` |
 | Beacon Networks | 1 250 000 | `pickle-Pepper-PETTER-piPEr-picKEd-PEPPERS_beacon` |
 | Cascade Communications | 250 000 | `pickle-Pepper-PETTER-piPEr-picKEd-PEPPERS_cascade` |
+
+**Non-admin keys** are the admin key with a `_worker` or `_reader` suffix
+appended, e.g. `pickle-…-PEPPERS_acme_worker`. The `RequireRole` endpoint
+filter uses these:
+
+| Role | Read | Create / update | Delete |
+|---|:-:|:-:|:-:|
+| admin  | ✓ | ✓ | ✓ |
+| worker | ✓ | ✓ (except admin-only fields) | ✗ (403) |
+| reader | ✓ | ✗ (403) | ✗ (403) |
+
+The set of admin-only fields comes from `field_policy` per tenant and is
+returned in `/api/v1/me.adminOnlyFields`; the SPA and WASM twin both use it
+to lock the drawer inputs for non-admin roles.
 
 ## Common tasks
 
