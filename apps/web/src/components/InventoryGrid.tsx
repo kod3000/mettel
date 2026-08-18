@@ -300,9 +300,12 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
                             {query.error.message}
                         </div>
                     ) : rows.length === 0 ? (
-                        <div className="px-4 py-6 text-sm text-slate-500">
-                            No inventory matches these filters.
-                        </div>
+                        <EmptyState
+                            params={params}
+                            onParamsChange={onParamsChange}
+                            role={role}
+                            onCreateNew={onCreateNew}
+                        />
                     ) : (
                         <div style={{ position: "relative", height: virtualizer.getTotalSize() }}>
                             {virtualizer.getVirtualItems().map((vr) => {

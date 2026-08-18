@@ -255,6 +255,8 @@ function AppShellInner(props: {
                             params={params}
                             onParamsChange={setParams}
                             onRowSelect={setSelectedRow}
+                            role={effectiveRole}
+                            onCreateNew={canWrite ? () => setCreateOpen(true) : undefined}
                         />
                     </Suspense>
                 ) : (
@@ -263,6 +265,8 @@ function AppShellInner(props: {
                         onParamsChange={setParams}
                         onRowSelect={setSelectedRow}
                         gpuHover={false}
+                        role={effectiveRole}
+                        onCreateNew={canWrite ? () => setCreateOpen(true) : undefined}
                     />
                 )}
             </div>
