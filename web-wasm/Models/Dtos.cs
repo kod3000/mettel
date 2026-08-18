@@ -122,9 +122,13 @@ public sealed record DebugLsnResponse(
     [property: JsonPropertyName("reachable")]  bool    Reachable);
 
 // GET /api/v1/me — fetched once per (tenant, role) change to gate write UI.
+// `ClientName` mirrors `client.name` — used by the custom-key chip so the
+// operator can see which tenant a pasted key resolved to. Optional on
+// older API builds; System.Text.Json will leave it null.
 public sealed record MeResponse(
-    [property: JsonPropertyName("clientId")]       string ClientId,
-    [property: JsonPropertyName("role")]           string Role,
+    [property: JsonPropertyName("clientId")]        string ClientId,
+    [property: JsonPropertyName("clientName")]      string? ClientName,
+    [property: JsonPropertyName("role")]            string Role,
     [property: JsonPropertyName("adminOnlyFields")] IReadOnlyList<string> AdminOnlyFields);
 
 public sealed record BulkJobAccepted(

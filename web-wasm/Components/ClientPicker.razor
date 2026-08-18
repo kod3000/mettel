@@ -1,29 +1,125 @@
 @inject TenantContext Tenant
+@inject MeService Me
+@inject IJSRuntime JS
+@implements IDisposable
+
+@* When a custom key is set, hide the built-in tenant/role selects and
+   render the emerald chip with a clear button + "as <TenantName> <role>"
+   pulled from /me. Otherwise render the classic picker plus a small
+   "Use my own key" affordance that expands into an inline input. *@
 
 <div class="picker-group">
-    <label class="picker-label">
-        <span>Client</span>
-        <select class="select" @onchange="OnPickTenant" value="@Tenant.Current.Id" aria-label="Client">
-            @foreach (var t in Models.Tenant.All)
-            {
-                <option value="@t.Id">@t.Label</option>
-            }
-        </select>
-    </label>
-    <label class="picker-label"
-           title="Switch role — reader can only view, worker can insert/update, admin can also delete">
-        <span>Role</span>
-        <select class="select role-@Tenant.CurrentRole.ToString().ToLowerInvariant()"
-                @onchange="OnPickRole" value="@Tenant.CurrentRole.ToWire()" aria-label="Role">
-            <option value="admin">admin</option>
-            <option value="worker">worker</option>
-            <option value="reader">reader</option>
-        </select>
-    </label>
+    @if (Tenant.CustomKey is { } customKey)
+    {
+        <span class="picker-label">Key</span>
+        <span class="chip"
+              style="border-color:var(--emerald-300, #6ee7b7);background:var(--emerald-50, #ecfdf5);color:var(--emerald-800, #065f46);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
+              title="@customKey">
+            custom: @Trunc(customKey, 12)…
+            <button type="button" class="btn btn-mini"
+                    style="margin-left:6px;padding:0 4px;line-height:1"
+                    @onclick="ClearCustomKey"
+                    title="Clear custom key and return to the demo picker"
+                    aria-label="Clear custom key">
+                ✕
+            </button>
+        </span>
+        @if (Me.Current is { } me)
+        {
+            <span class="picker-label" style="color:var(--slate-600, #475569)">as</span>
+            <span style="font-weight:600;color:var(--slate-800, #1e293b);font-size:12px">
+                @(string.IsNullOrWhiteSpace(me.ClientName) ? "unnamed tenant" : me.ClientName)
+            </span>
+            <span class="chip role-@me.Role" style="font-size:11px">@me.Role</span>
+        }
+    }
+    else
+    {
+        <label class="picker-label">
+            <span>Client</span>
+            <select class="select" @onchange="OnPickTenant" value="@Tenant.Current.Id" aria-label="Client">
+                @foreach (var t in Models.Tenant.All)
+                {
+                    <option value="@t.Id">@t.Label</option>
+                }
+            </select>
+        </label>
+        <label class="picker-label"
+               title="Switch role — reader can only view, worker can insert/update, admin can also delete">
+            <span>Role</span>
+            <select class="select role-@Tenant.CurrentRole.ToString().ToLowerInvariant()"
+                    @onchange="OnPickRole" value="@Tenant.CurrentRole.ToWire()" aria-label="Role">
+                <option value="admin">admin</option>
+                <option value="worker">worker</option>
+                <option value="reader">reader</option>
+            </select>
+        </label>
+
+        @if (_inputOpen)
+        {
+            <input type="text" class="select" style="width:16rem;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
+                   placeholder="Paste your X-Api-Key"
+                   value="@_draft"
+                   @oninput="e => _draft = e.Value?.ToString() ?? string.Empty"
+                   @onkeydown="OnDraftKeyDown"
+                   @ref="_inputRef" />
+            <button type="button" class="btn primary btn-mini"
+                    disabled="@(string.IsNullOrWhiteSpace(_draft))"
+                    @onclick="UseDraft">Use</button>
+            <button type="button" class="btn btn-mini" @onclick="CancelInput">Cancel</button>
+        }
+        else
+        {
+            <button type="button" class="btn btn-mini"
+                    title="Paste an X-Api-Key issued at auth.mettel.exercise.dany.codes"
+                    @onclick="OpenInput">
+                Use my own key
+            </button>
+        }
+    }
 </div>
 
 
 @code {
+    private const string StorageKey = "bruin.customKey";
+    private bool _inputOpen;
+    private string _draft = "";
+    private ElementReference _inputRef;
+    private bool _hydrated;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && !_hydrated)
+        {
+            _hydrated = true;
+            try
+            {
+                var stored = await JS.InvokeAsync<string?>("localStorage.getItem", StorageKey);
+                if (!string.IsNullOrWhiteSpace(stored))
+                {
+                    Tenant.SetCustomKey(stored);
+                    // Nudge /me so the chip's "as <tenant> <role>" info
+                    // shows up on first paint rather than waiting for a
+                    // tenant-context flip.
+                    _ = Me.RefreshAsync();
+                    StateHasChanged();
+                }
+            }
+            catch { /* prerender / private mode */ }
+        }
+        if (_inputOpen)
+        {
+            try { await _inputRef.FocusAsync(); } catch { /* element removed */ }
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        Me.OnChanged += OnMeChanged;
+    }
+
+    private void OnMeChanged() => InvokeAsync(StateHasChanged);
+
     private void OnPickTenant(ChangeEventArgs e)
     {
         var id = e.Value?.ToString();
@@ -34,5 +130,50 @@
     private void OnPickRole(ChangeEventArgs e)
     {
         Tenant.SetRole(RoleExtensions.FromWire(e.Value?.ToString()));
+    }
+
+    private void OpenInput()
+    {
+        _inputOpen = true;
+        _draft = "";
+    }
+
+    private void CancelInput()
+    {
+        _inputOpen = false;
+        _draft = "";
+    }
+
+    private async Task UseDraft()
+    {
+        var v = _draft.Trim();
+        if (v.Length == 0) return;
+        Tenant.SetCustomKey(v);
+        try { await JS.InvokeVoidAsync("localStorage.setItem", StorageKey, v); }
+        catch { /* private mode */ }
+        _ = Me.RefreshAsync();
+        _inputOpen = false;
+        _draft = "";
+    }
+
+    private async Task ClearCustomKey()
+    {
+        Tenant.SetCustomKey(null);
+        try { await JS.InvokeVoidAsync("localStorage.removeItem", StorageKey); }
+        catch { /* private mode */ }
+        _ = Me.RefreshAsync();
+    }
+
+    private async Task OnDraftKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") CancelInput();
+        else if (e.Key == "Enter") await UseDraft();
+    }
+
+    private static string Trunc(string s, int n) => s.Length <= n ? s : s.Substring(0, n);
+
+    public void Dispose()
+    {
+        Me.OnChanged -= OnMeChanged;
     }
 }

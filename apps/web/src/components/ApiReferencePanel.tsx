@@ -91,6 +91,25 @@ const ENDPOINTS: Endpoint[] = [
     },
 ];
 
+// Claude Desktop JSON config for wiring the MCP server. Base URL is the
+// current origin so the snippet ships runnable per-environment; the API
+// key is the caller's current tenant key. Path is intentionally a
+// placeholder since it's the reader's local checkout — no way to know.
+function mcpConfigSnippet(base: string, apiKey: string): string {
+    return JSON.stringify({
+        mcpServers: {
+            bruin: {
+                command: "node",
+                args: ["/absolute/path/to/mt-challenge/packages/mcp-server/dist/server.js"],
+                env: {
+                    BRUIN_API_BASE_URL: base,
+                    BRUIN_API_KEY: apiKey,
+                },
+            },
+        },
+    }, null, 2);
+}
+
 const FILTERS: Array<[string, string]> = [
     ["q",                "Prefix search on service # / product name (e.g. `q=fib` matches Fiber, not Amplifier)."],
     ["status",           "Repeat for OR — `?status=pending&status=active`. Allowed: pending, active, disconnected."],
@@ -190,6 +209,48 @@ export function ApiReferencePanel({ apiKey, tenantLabel, onClose }: Props) {
                         <p className="text-[11px] text-slate-500 mt-1">
                             Also reachable at <code className="font-mono">/use/v1/api/*</code> — a stable
                             public alias with the same routes.
+                        </p>
+                    </section>
+
+                    <section>
+                        <div className="flex items-center justify-between mb-2">
+                            <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                                MCP access for AI agents
+                            </div>
+                            <a
+                                href="https://github.com/kod3000/mt-challenge/tree/main/packages/mcp-server"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[11px] text-indigo-700 hover:underline"
+                            >
+                                README →
+                            </a>
+                        </div>
+                        <p className="text-xs text-slate-700 leading-relaxed mb-2">
+                            Drive the same API from Claude Desktop, Cursor, or any
+                            MCP-capable agent — ten tools over stdio, same auth key
+                            below. Model-agnostic, no browser required.
+                        </p>
+                        <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">
+                            Install
+                        </div>
+                        <pre className="bg-slate-950 text-slate-100 text-[11.5px] font-mono rounded p-2.5 overflow-x-auto whitespace-pre leading-relaxed">
+{`cd packages/mcp-server
+npm install && npm run build`}
+                        </pre>
+                        <div className="text-[11px] uppercase tracking-wide text-slate-500 mt-3 mb-1 flex items-center justify-between">
+                            <span>Claude Desktop config</span>
+                            <CopyButton
+                                text={mcpConfigSnippet(base, apiKey)}
+                                label="Copy"
+                            />
+                        </div>
+                        <pre className="bg-slate-950 text-slate-100 text-[11.5px] font-mono rounded p-2.5 overflow-x-auto whitespace-pre leading-relaxed">
+{mcpConfigSnippet(base, apiKey)}
+                        </pre>
+                        <p className="text-[11px] text-slate-500 mt-1">
+                            Add to <code className="font-mono">~/Library/Application Support/Claude/claude_desktop_config.json</code>{" "}
+                            and restart. The <code className="font-mono">/absolute/path</code> is your local checkout.
                         </p>
                     </section>
 

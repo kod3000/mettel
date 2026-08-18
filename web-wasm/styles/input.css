@@ -215,6 +215,9 @@
     .local-slice-hint { @apply m-4 flex flex-wrap items-center gap-2.5 rounded-md border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-[13px] text-slate-700; }
     .local-slice-hint strong { @apply text-emerald-800; }
     .hidden-match-chip { @apply pointer-events-auto absolute top-1/2 right-2 inline-flex -translate-y-1/2 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-px text-[10px] font-medium text-amber-800 shadow-sm; }
+    /* Highlighted search-match substring inside a grid cell. Kept subtle
+       so long matches don't fight the row's own colours. */
+    .hl-match { @apply rounded-sm bg-yellow-200 px-0.5 text-inherit; }
 
     .edit-form { @apply flex flex-col gap-2.5; }
     .edit-block label { @apply mb-1 block text-[11px] tracking-wide text-slate-500 uppercase; }

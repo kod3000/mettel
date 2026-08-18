@@ -56,12 +56,18 @@ silent no-op.
 
 **Bulk jobs.** POST persists the file, inserts `bulk_job`, returns 202 in <100ms —
 no parsing in the handler. Worker (BackgroundService, same image, `--worker`) claims
-via `SELECT … FOR UPDATE SKIP LOCKED`, so it scales horizontally with no
-coordinator. 5000-row chunks: validate → COPY into `ON COMMIT DROP` staging →
-`INSERT … ON CONFLICT DO NOTHING RETURNING id` counts winners; losers found by
-join-back and written to `bulk_job_error`. `processed_rows` checkpoints in the same
-transaction as the insert, so crash + restart resumes at the chunk boundary with an
-identical final success count (test covered).
+via `SELECT … FOR UPDATE SKIP LOCKED` + a session-scoped `pg_try_advisory_lock` held
+across the whole chunk loop, so N workers never race on one job and a crashed
+worker's lock releases with its connection (no `locked_until` column needed).
+5000-row chunks: validate → COPY into `ON COMMIT DROP` staging → `SELECT DISTINCT
+ON (client_id, service_number)` collapses within-file duplicates → `INSERT …
+ON CONFLICT DO NOTHING RETURNING id` drops rows that collide with existing DB rows.
+Losers from both passes are found by join-back on the staging id (winners
+survive, everything else is written to `bulk_job_error` with reason
+`"duplicate service_number"`) so the errors CSV surfaces every rejected row
+regardless of which dedup pass caught it. `processed_rows` checkpoints in the
+same transaction as the insert, so crash + restart resumes at the chunk boundary
+with an identical final success count (test covered).
 
 **Frontend + contract coherence.** 300ms debounce on search; every in-flight
 request carries an **AbortController + query-key ordering guard**, so a slow
@@ -84,7 +90,11 @@ agreeing, not of either one alone. To exercise that contract from a second
 runtime, the same OpenAPI drives a Blazor WebAssembly twin at
 `wasm.mettel.exercise.dany.codes` — feature-identical to the React SPA with a
 hand-written client over the generated types, so any breaking rename fails both
-builds instead of silently drifting in one.
+builds instead of silently drifting in one. A third consumer,
+`packages/mcp-server`, republishes the same surface as ten Model Context
+Protocol tools with zod-typed inputs mirroring the OpenAPI enums, so any
+MCP-capable agent (Claude Desktop, Cursor, custom SDK loops) can drive the
+grid without a browser — and any contract change surfaces there too.
 
 **Multi-tenancy + roles.** Every statement carries `WHERE client_id = @cid`;
 the EF Core global filter is defence in depth; Postgres RLS on `inventory` is
@@ -101,7 +111,10 @@ per-tenant columns only admins may write (e.g. `notes`). `/me` returns the
 tenant, role, and admin-only field list in one shot so the SPA can gate write UI
 without a second round-trip. Deletes are soft — `deleted_at IS NOT NULL` rows
 stay for audit and re-import; every read filter and the `(client_id,
-service_number)` unique index carry a `WHERE deleted_at IS NULL` predicate. The
+service_number)` unique index carry a `WHERE deleted_at IS NULL` predicate. A
+practical consequence: soft-deleting a row frees its service number for reuse,
+which is what operators want when re-running a fixed-up CSV, but does mean
+"duplicate" is a live-only concept — historical rows aren't candidates. The
 bulk-jobs `ON CONFLICT` clause carries the same predicate so Postgres can infer
 the partial index (a plain `ON CONFLICT (client_id, service_number)` raises
 42P10 and the worker silently loops; caught once, guarded now by an integration

@@ -47,6 +47,35 @@
             </section>
 
             <section>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+                    <div class="eyebrow">MCP access for AI agents</div>
+                    <a href="https://github.com/kod3000/mt-challenge/tree/main/packages/mcp-server"
+                       target="_blank" rel="noopener noreferrer"
+                       style="font-size:11px;color:var(--indigo-700);text-decoration:none">README →</a>
+                </div>
+                <p style="font-size:11px;color:var(--slate-700);line-height:1.5;margin:0 0 6px">
+                    Drive the same API from Claude Desktop, Cursor, or any
+                    MCP-capable agent — ten tools over stdio, same auth key
+                    above. Model-agnostic, no browser required.
+                </p>
+                <div class="eyebrow" style="margin-bottom:4px">Install</div>
+                <pre class="snippet">cd packages/mcp-server
+npm install &amp;&amp; npm run build</pre>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;margin-bottom:4px">
+                    <div class="eyebrow">Claude Desktop config</div>
+                    <button type="button" class="btn" style="font-size:11px;padding:2px 8px"
+                            @onclick="CopyMcpConfig">
+                        @(_copiedTag == "mcp" ? "Copied ✓" : "Copy")
+                    </button>
+                </div>
+                <pre class="snippet">@McpConfigSnippet(Base, Tenant.Current.ApiKey)</pre>
+                <p style="font-size:10px;color:var(--slate-500);margin-top:4px">
+                    Add to <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>
+                    and restart. The <code>/absolute/path</code> is your local checkout.
+                </p>
+            </section>
+
+            <section>
                 <div class="eyebrow" style="margin-bottom:6px">Endpoints</div>
                 <div style="display:flex;flex-direction:column;gap:10px">
                     @foreach (var ep in Endpoints)
@@ -120,6 +149,9 @@
 
     private Task CopyKey() => CopyAsync(Tenant.Current.ApiKey, "key");
 
+    private Task CopyMcpConfig() =>
+        CopyAsync(McpConfigSnippet(Base, Tenant.Current.ApiKey), "mcp");
+
     private async Task CopyAsync(string text, string tag)
     {
         var ok = await JS.InvokeAsync<bool>("bruinClipboard.write", text);
@@ -139,6 +171,28 @@
         if (k.Length <= 12) return new string('•', k.Length);
         return k[..6] + new string('•', 20) + k[^4..];
     }
+
+    // Claude Desktop config JSON for wiring the MCP server. Base URL is
+    // the current origin so the snippet ships runnable per-environment;
+    // API key is the caller's current tenant key. The absolute path is
+    // intentionally a placeholder — no way to know the reader's checkout.
+    private static string McpConfigSnippet(string baseUrl, string apiKey) =>
+        System.Text.Json.JsonSerializer.Serialize(new
+        {
+            mcpServers = new
+            {
+                bruin = new
+                {
+                    command = "node",
+                    args = new[] { "/absolute/path/to/mt-challenge/packages/mcp-server/dist/server.js" },
+                    env = new
+                    {
+                        BRUIN_API_BASE_URL = baseUrl,
+                        BRUIN_API_KEY = apiKey,
+                    },
+                },
+            },
+        }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
 
     private sealed record Endpoint(string Method, string Path, string Title, string Description, Func<string, string, string> Example);
 

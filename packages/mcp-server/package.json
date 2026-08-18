@@ -1,0 +1,31 @@
+{
+  "name": "@bruin/mcp-server",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Model Context Protocol server for the Bruin Inventory Grid API. Exposes the inventory + bulk-jobs surface as MCP tools so any MCP-capable agent (Claude Desktop, Cursor, custom SDK clients) can drive the grid without a browser.",
+  "type": "module",
+  "bin": {
+    "bruin-mcp": "./dist/server.js"
+  },
+  "main": "./dist/server.js",
+  "types": "./dist/server.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsc --watch",
+    "check": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "~5.6.0"
+  },
+  "files": [
+    "dist"
+  ]
+}

@@ -151,7 +151,11 @@ export function RowDetailDrawer({ id, onClose, canWrite, canDelete, adminOnlyFie
     const row = detail.data;
     const busy = mut.isPending || patchMut.isPending || delMut.isPending;
     const backdropClose = () => { if (!busy && !editing) onClose(); };
-    const readOnlySet = new Set(adminOnlyFields);
+    // Admin-only fields lock the input for workers/readers only. Admins
+    // can still edit them — that's the whole point of "admin-only". The
+    // earlier code applied the restriction to everyone, so admins found
+    // their own fields greyed out (the reported "update gives an error").
+    const readOnlySet = new Set(canDelete ? [] : adminOnlyFields);
     const draftValue = (k: keyof InventoryRow): string =>
         (draft[k as string] ?? (row?.[k] as string | null | undefined) ?? "") as string;
     const setField = (k: string, v: string | null) => {

@@ -1,6 +1,8 @@
 @inject BruinApiClient Api
 @inject LocalReplica Replica
 @inject IJSRuntime JS
+@inject MeService Me
+@inject NavigationManager Nav
 @implements IDisposable
 
 @* Virtualized inventory grid backed by keyset-cursor pagination. Loads
@@ -99,6 +101,77 @@
                     End of results
                 </div>
             }
+            else if (_rows.Count == 0 && !_loadingMore)
+            {
+                @* Three variants, keyed off HasActiveFilters + role. Mirrors
+                   apps/web/src/components/EmptyState.tsx in the React SPA. *@
+                @if (HasActiveFilters())
+                {
+                    <div style="display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:24px;font-size:14px;color:var(--slate-500, #64748b)">
+                        <span>No inventory matches these filters.</span>
+                        <button type="button" class="btn btn-mini" @onclick="ClearFiltersAsync">Clear filters</button>
+                    </div>
+                }
+                else if (Me.EffectiveRole == Role.Reader)
+                {
+                    <div style="margin:24px auto;max-width:32rem;padding:24px;background:var(--white,#fff);border:1px solid var(--slate-200,#e2e8f0);border-radius:8px;box-shadow:0 1px 2px rgba(15,23,42,.05)">
+                        <h3 style="margin:0 0 8px;font-size:16px;font-weight:600;color:var(--slate-900,#0f172a)">
+                            Nothing here yet
+                        </h3>
+                        <p style="margin:0 0 12px;font-size:14px;color:var(--slate-600,#475569)">
+                            Your key has <span style="font-weight:600;color:var(--slate-800,#1e293b)">reader</span>
+                            access, so you can view inventory but not create it. This tenant hasn&rsquo;t had any rows added yet.
+                        </p>
+                        <ul style="margin:0;padding:0 0 0 20px;font-size:14px;color:var(--slate-600,#475569);list-style:disc">
+                            <li style="margin-bottom:4px">Ask an admin or worker on your tenant to add rows.</li>
+                            <li>
+                                Or issue yourself a key with more permissions from the identity console:
+                                <a href="https://auth.mettel.exercise.dany.codes/" target="_blank" rel="noopener noreferrer"
+                                   style="font-weight:600;color:#4f46e5;text-decoration:none">
+                                    Manage account keys ↗
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+                }
+                else
+                {
+                    <div style="margin:24px auto;max-width:32rem;padding:24px;background:var(--white,#fff);border:1px solid var(--slate-200,#e2e8f0);border-radius:8px;box-shadow:0 1px 2px rgba(15,23,42,.05)">
+                        <h3 style="margin:0 0 8px;font-size:16px;font-weight:600;color:var(--slate-900,#0f172a)">
+                            Welcome — this tenant is empty
+                        </h3>
+                        <p style="margin:0 0 16px;font-size:14px;color:var(--slate-600,#475569)">
+                            You&rsquo;re signed in as <span style="font-weight:600;color:var(--slate-800,#1e293b)">@Me.EffectiveRole.ToWire()</span>.
+                            Add your first inventory row to get going.
+                        </p>
+                        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px">
+                            @if (Me.CanWrite)
+                            {
+                                <button type="button" class="btn primary" @onclick="RaiseCreateNew">
+                                    + Create your first row
+                                </button>
+                            }
+                            <span style="font-size:12px;color:var(--slate-500,#64748b)">
+                                or drag a CSV into the <span style="font-weight:600;color:var(--slate-700,#334155)">Bulk upload</span> panel above.
+                            </span>
+                        </div>
+                        <p style="margin:16px 0 0;font-size:12px;color:var(--slate-500,#64748b)">
+                            Need a starting file? Grab a
+                            <a href="/api/v1/bulk-jobs/csv-template" style="color:#4f46e5;text-decoration:none">CSV template</a>
+                            or the
+                            <a href="/api/v1/bulk-jobs/sample-500k" style="color:#4f46e5;text-decoration:none">500k row sample</a>.
+                        </p>
+                        @if (Me.EffectiveRole == Role.Admin)
+                        {
+                            <p style="margin:16px 0 0;padding-top:12px;border-top:1px solid var(--slate-100,#f1f5f9);font-size:12px;color:var(--slate-500,#64748b)">
+                                Admins can also invite teammates from the
+                                <a href="https://auth.mettel.exercise.dany.codes/" target="_blank" rel="noopener noreferrer"
+                                   style="font-weight:600;color:#4f46e5;text-decoration:none">identity console ↗</a>.
+                            </p>
+                        }
+                    </div>
+                }
+            }
         }
     </div>
 </div>
@@ -109,6 +182,31 @@
     [Parameter] public EventCallback<BruinApiClient.ListParams> ValueChanged { get; set; }
     [Parameter] public EventCallback<InventoryRow> OnRowClick { get; set; }
     [Parameter] public string? SelectedId { get; set; }
+    // Fired from the empty state's "+ Create your first row" button; the
+    // host page wires this to the same open-create action the header
+    // "+ New" button uses.
+    [Parameter] public EventCallback OnCreateNew { get; set; }
+
+    private bool HasActiveFilters() =>
+        !string.IsNullOrWhiteSpace(Value.Q)
+        || (Value.Status?.Count ?? 0) > 0
+        || (Value.ProductCategory?.Count ?? 0) > 0
+        || (Value.State?.Count ?? 0) > 0;
+
+    private async Task ClearFiltersAsync()
+    {
+        await ValueChanged.InvokeAsync(Value with
+        {
+            Q = null,
+            Fields = null,
+            Status = null,
+            ProductCategory = null,
+            State = null,
+            Cursor = null,
+        });
+    }
+
+    private Task RaiseCreateNew() => OnCreateNew.InvokeAsync();
 
     private readonly List<InventoryRow> _rows = new();
     private string? _nextCursor;
@@ -238,10 +336,11 @@
 
     private RenderFragment RenderCell(InventoryRow row, string colId) => builder =>
     {
+        var q = (Value.Q ?? "").Trim();
         switch (colId)
         {
-            case "serviceNumber":   builder.AddContent(0, row.ServiceNumber); break;
-            case "productName":     builder.AddContent(0, row.ProductName); break;
+            case "serviceNumber":   AddHighlighted(builder, row.ServiceNumber, q); break;
+            case "productName":     AddHighlighted(builder, row.ProductName, q); break;
             case "productCategory": builder.AddContent(0, row.ProductCategory); break;
             case "status":
                 builder.OpenElement(0, "span");
@@ -249,14 +348,45 @@
                 builder.AddContent(2, row.Status);
                 builder.CloseElement();
                 break;
-            case "city":            builder.AddContent(0, row.City ?? "—"); break;
-            case "state":           builder.AddContent(0, row.State ?? "—"); break;
-            case "address":         builder.AddContent(0, row.Address ?? "—"); break;
-            case "assignee":        builder.AddContent(0, row.Assignee ?? "—"); break;
+            case "city":            AddHighlighted(builder, row.City, q); break;
+            case "state":           AddHighlighted(builder, row.State, q); break;
+            case "address":         AddHighlighted(builder, row.Address, q); break;
+            case "assignee":        AddHighlighted(builder, row.Assignee, q); break;
             case "createdAt":       builder.AddContent(0, Fmt(row.CreatedAt)); break;
             case "updatedAt":       builder.AddContent(0, Fmt(row.UpdatedAt)); break;
         }
     };
+
+    // Splits `text` on each case-insensitive occurrence of `q`, emitting
+    // the matches as <mark>…</mark> so the operator sees exactly which
+    // substring earned the row its place in the results. Empty query
+    // falls through to a plain text node — zero mark tags, zero cost.
+    private static void AddHighlighted(RenderTreeBuilder builder, string? text, string q)
+    {
+        var s = text ?? "";
+        if (s.Length == 0) { builder.AddContent(0, "—"); return; }
+        var needle = q.Trim();
+        if (needle.Length == 0) { builder.AddContent(0, s); return; }
+        var hay = s.ToLowerInvariant();
+        var nLow = needle.ToLowerInvariant();
+        var cursor = 0;
+        var seq = 0;
+        while (cursor <= s.Length)
+        {
+            var idx = hay.IndexOf(nLow, cursor, StringComparison.Ordinal);
+            if (idx < 0)
+            {
+                if (cursor < s.Length) builder.AddContent(seq++, s.Substring(cursor));
+                break;
+            }
+            if (idx > cursor) builder.AddContent(seq++, s.Substring(cursor, idx - cursor));
+            builder.OpenElement(seq++, "mark");
+            builder.AddAttribute(seq++, "class", "hl-match");
+            builder.AddContent(seq++, s.Substring(idx, needle.Length));
+            builder.CloseElement();
+            cursor = idx + Math.Max(needle.Length, 1);
+        }
+    }
 
     // ---- Hidden-field match hint --------------------------------------
 

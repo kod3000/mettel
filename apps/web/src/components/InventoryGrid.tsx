@@ -16,7 +16,7 @@ import {
     type ColumnOrderState,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { InventoryRow, ListParams } from "../api/inventory.js";
 import { useInventoryList } from "../hooks/useInventoryList.js";
 import { CountDisplay } from "./CountDisplay.js";
@@ -64,34 +64,81 @@ const COLUMN_META: Array<{ id: keyof InventoryRow; label: string; width: string;
 const DEFAULT_SEARCH_FIELDS: readonly (keyof InventoryRow)[] = [
     "productName", "serviceNumber", "city", "state", "address", "assignee", "notes",
 ];
-const columns = [
-    columnHelper.accessor("serviceNumber", { header: "Service #", cell: (i) => (
-        <span className="font-mono text-[12.5px] tracking-tight">{i.getValue() ?? ""}</span>
-    )}),
-    columnHelper.accessor("productCategory", { header: "Category", cell: (i) => (
-        <span className="text-[12px] text-slate-600 uppercase tracking-wide">{i.getValue()}</span>
-    )}),
-    columnHelper.accessor("productName", { header: "Product" }),
-    columnHelper.accessor("status", { header: "Status", cell: (i) => <StatusBadge s={i.getValue() ?? ""} /> }),
-    columnHelper.accessor("city", { header: "City" }),
-    columnHelper.accessor("state", { header: "State", cell: (i) => (
-        <span className="font-mono text-[12.5px]">{i.getValue() ?? ""}</span>
-    )}),
-    columnHelper.accessor("address", { header: "Address", cell: (i) => (
-        <span className="text-[12.5px] text-slate-700 truncate" title={i.getValue() ?? undefined}>
-            {i.getValue() ?? "—"}
-        </span>
-    )}),
-    columnHelper.accessor("assignee", { header: "Assignee", cell: (i) => (
-        <span className="font-mono text-[12.5px] text-slate-600">{i.getValue() ?? "—"}</span>
-    )}),
-    columnHelper.accessor("createdAt", { header: "Created", cell: (i) => (
-        <span className="tabular-nums text-[12.5px] text-slate-600">{fmtDate(i.getValue())}</span>
-    )}),
-    columnHelper.accessor("updatedAt", { header: "Updated", cell: (i) => (
-        <span className="tabular-nums text-[12.5px] text-slate-600">{fmtDate(i.getValue())}</span>
-    )}),
-];
+// Wrap every occurrence of `q` inside `text` in a <mark> so the operator
+// can see WHY a row landed in the search results. Case-insensitive; the
+// original substring's casing is preserved inside the mark. Empty query
+// returns the raw text unchanged (no allocations, no wrapper node).
+function highlightMatches(text: string | null | undefined, q: string): ReactNode {
+    const s = text ?? "";
+    const needle = q.trim();
+    if (needle.length === 0 || s.length === 0) return s;
+    const hay = s.toLowerCase();
+    const nLow = needle.toLowerCase();
+    const parts: ReactNode[] = [];
+    let cursor = 0;
+    let key = 0;
+    while (cursor <= s.length) {
+        const idx = hay.indexOf(nLow, cursor);
+        if (idx === -1) {
+            if (cursor < s.length) parts.push(s.slice(cursor));
+            break;
+        }
+        if (idx > cursor) parts.push(s.slice(cursor, idx));
+        parts.push(
+            <mark key={key++} className="rounded-sm bg-yellow-200 px-0.5 text-inherit">
+                {s.slice(idx, idx + needle.length)}
+            </mark>,
+        );
+        cursor = idx + Math.max(needle.length, 1);
+    }
+    return <>{parts}</>;
+}
+
+// Columns are built per-render so cell renderers close over the current
+// search query. Cheap — allocating ten column defs per keystroke is
+// noise compared to what react-table already does for header meta.
+function buildColumns(q: string) {
+    return [
+        columnHelper.accessor("serviceNumber", { header: "Service #", cell: (i) => (
+            <span className="font-mono text-[12.5px] tracking-tight">{highlightMatches(i.getValue(), q)}</span>
+        )}),
+        columnHelper.accessor("productCategory", { header: "Category", cell: (i) => (
+            <span className="text-[12px] text-slate-600 uppercase tracking-wide">{i.getValue()}</span>
+        )}),
+        columnHelper.accessor("productName", { header: "Product", cell: (i) => (
+            <span>{highlightMatches(i.getValue(), q)}</span>
+        )}),
+        columnHelper.accessor("status", { header: "Status", cell: (i) => <StatusBadge s={i.getValue() ?? ""} /> }),
+        columnHelper.accessor("city", { header: "City", cell: (i) => (
+            <span>{highlightMatches(i.getValue(), q)}</span>
+        )}),
+        columnHelper.accessor("state", { header: "State", cell: (i) => (
+            <span className="font-mono text-[12.5px]">{highlightMatches(i.getValue(), q)}</span>
+        )}),
+        columnHelper.accessor("address", { header: "Address", cell: (i) => {
+            const v = i.getValue();
+            return (
+                <span className="text-[12.5px] text-slate-700 truncate" title={v ?? undefined}>
+                    {v ? highlightMatches(v, q) : "—"}
+                </span>
+            );
+        }}),
+        columnHelper.accessor("assignee", { header: "Assignee", cell: (i) => {
+            const v = i.getValue();
+            return (
+                <span className="font-mono text-[12.5px] text-slate-600">
+                    {v ? highlightMatches(v, q) : "—"}
+                </span>
+            );
+        }}),
+        columnHelper.accessor("createdAt", { header: "Created", cell: (i) => (
+            <span className="tabular-nums text-[12.5px] text-slate-600">{fmtDate(i.getValue())}</span>
+        )}),
+        columnHelper.accessor("updatedAt", { header: "Updated", cell: (i) => (
+            <span className="tabular-nums text-[12.5px] text-slate-600">{fmtDate(i.getValue())}</span>
+        )}),
+    ];
+}
 
 // Only server-sort the five columns the API supports.
 const SORTABLE = new Set(["serviceNumber", "productName", "status", "createdAt", "updatedAt"]);
@@ -101,6 +148,9 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
     const rows: InventoryRow[] = useMemo(
         () => query.data?.pages.flatMap((p) => p.rows ?? []) ?? [],
         [query.data]);
+    // Rebuild the column defs when the search string changes so cells
+    // re-render with the new highlight regions.
+    const columns = useMemo(() => buildColumns(params.q ?? ""), [params.q]);
 
     // Column visibility + order — both persisted per browser (not per
     // tenant since these track the operator, not the data set).
