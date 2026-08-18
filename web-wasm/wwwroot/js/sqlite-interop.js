@@ -14,19 +14,52 @@
 // dev doesn't leak file handles.
 
 (function () {
-    const SQLITE_MODULE_PATH = "vendor/sqlite/jswasm/sqlite3.mjs";
+    const VENDOR_DIR = "vendor/sqlite/jswasm/";
+    // Load the CLASSIC (non-module) bundle rather than sqlite3.mjs. Two
+    // reasons:
+    //   1. `.js` is universally served as application/javascript; `.mjs`
+    //      is not, and nginx has to be taught the type explicitly.
+    //   2. The .mjs bundle computes `new URL('sqlite3.wasm', import.meta.url)`
+    //      at module top-level. If we load it via a Blob URL to work
+    //      around (1), `import.meta.url` becomes a `blob:` URL and the
+    //      URL constructor throws before Emscripten's `wasmBinary` /
+    //      `locateFile` config is ever consulted. The classic bundle
+    //      uses `document.currentScript.src` instead, so a plain
+    //      `<script src=...>` gives it a well-formed base URL.
+    const SQLITE_SCRIPT_PATH = VENDOR_DIR + "sqlite3.js";
     const VFS_NAME = "opfs-sahpool";
 
     let sqlite3 = null;      // the top-level SQLite JS API namespace
     let poolUtil = null;     // SAH-pool utility (for wipe / removeDb / etc.)
     let dbs = new Map();     // dbName -> { db, path }
+    let scriptLoadPromise = null;
+
+    function loadClassicScript(url) {
+        if (scriptLoadPromise) return scriptLoadPromise;
+        scriptLoadPromise = new Promise((resolve, reject) => {
+            const existing = document.querySelector(`script[data-bruin-sqlite]`);
+            if (existing) { resolve(); return; }
+            const s = document.createElement("script");
+            s.src = url;
+            s.async = true;
+            s.setAttribute("data-bruin-sqlite", "");
+            s.onload = () => resolve();
+            s.onerror = () => reject(new Error(`Failed to load ${url}`));
+            document.head.appendChild(s);
+        });
+        return scriptLoadPromise;
+    }
 
     async function ensureSqlite() {
         if (sqlite3) return sqlite3;
-        // Absolute URL so `import()` from a classic script still resolves
-        // against the app base; base href is set to "/" in index.html.
-        const mod = await import(new URL(SQLITE_MODULE_PATH, document.baseURI).toString());
-        sqlite3 = await mod.default({
+        const scriptUrl = new URL(SQLITE_SCRIPT_PATH, document.baseURI).toString();
+
+        await loadClassicScript(scriptUrl);
+        if (typeof globalThis.sqlite3InitModule !== "function") {
+            throw new Error("sqlite3InitModule not found on global scope after script load");
+        }
+
+        sqlite3 = await globalThis.sqlite3InitModule({
             print: (m) => console.log("[sqlite]", m),
             printErr: (m) => console.warn("[sqlite]", m),
         });
