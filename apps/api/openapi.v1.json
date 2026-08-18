@@ -4,11 +4,6 @@
     "title": "Bruin.Api | v1",
     "version": "1.0.0"
   },
-  "servers": [
-    {
-      "url": "http://localhost:8081/"
-    }
-  ],
   "paths": {
     "/": {
       "get": {
@@ -1091,6 +1086,12 @@
             "nullable": true
           },
           "productCategory": {
+            "enum": [
+              "voice",
+              "data",
+              "wireless",
+              "other"
+            ],
             "type": "string",
             "nullable": true
           },
@@ -1099,6 +1100,11 @@
             "nullable": true
           },
           "status": {
+            "enum": [
+              "pending",
+              "active",
+              "disconnected"
+            ],
             "type": "string",
             "nullable": true
           },
@@ -1185,12 +1191,23 @@
             "type": "string"
           },
           "productCategory": {
+            "enum": [
+              "voice",
+              "data",
+              "wireless",
+              "other"
+            ],
             "type": "string"
           },
           "productName": {
             "type": "string"
           },
           "status": {
+            "enum": [
+              "pending",
+              "active",
+              "disconnected"
+            ],
             "type": "string"
           },
           "city": {
@@ -1309,6 +1326,17 @@
           },
           "instance": {
             "type": "string",
+            "nullable": true
+          },
+          "errors": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "description": "Per-field validation messages, keyed by property name. Populated on 400 validation-failed responses; absent otherwise.",
             "nullable": true
           }
         }
