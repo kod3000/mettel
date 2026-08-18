@@ -88,8 +88,13 @@ builds instead of silently drifting in one.
 
 **Multi-tenancy + roles.** Every statement carries `WHERE client_id = @cid`;
 the EF Core global filter is defence in depth; Postgres RLS on `inventory` is
-the third belt (prod connects as non-superuser `bruin_app`). Cross-tenant reads
-return 404 with a ProblemDetails body that leaks nothing — no 403, no FK error.
+built as the third belt (`CREATE ROLE bruin_app NOLOGIN` + a
+`current_setting('app.current_client_id')` policy live in the initial
+migration), but the app still connects as the superuser `bruin` for now, so
+RLS is loaded, not armed. Flipping it on is a connection-string swap plus a
+`SET LOCAL app.current_client_id` per request — deferred rather than shipped
+so the claim in this doc matches what runs. Cross-tenant reads return 404 with
+a ProblemDetails body that leaks nothing — no 403, no FK error.
 API keys carry a role (`admin` / `worker` / `reader`) resolved on every request;
 a `RequireRole` endpoint filter gates mutations, and `field_policy` names the
 per-tenant columns only admins may write (e.g. `notes`). `/me` returns the
