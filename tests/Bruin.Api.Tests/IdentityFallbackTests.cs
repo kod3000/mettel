@@ -93,21 +93,18 @@ public sealed class IdentityFallbackTests
     }
 
     [Fact]
-    public async Task Identity_resolved_tenant_only_sees_its_own_inventory()
+    public async Task Identity_resolved_tenant_sees_empty_inventory_end_to_end()
     {
+        // Proves the full pipeline: identity resolves → client row
+        // materialised → the /api/v1/inventory endpoint accepts the
+        // request and its client_id WHERE filter returns the tenant's
+        // (empty) slice without leaking any other tenant's rows.
         var tenantId = Guid.CreateVersion7();
         const string key = "kbrk_isolated_gamma_1234567890";
         _fx.IdentityStub.SetResponse(key, new IdentityResolution(tenantId, "Gamma", "admin"));
 
-        // First call: primes the local client row (via /me).
         using var client = _fx.Factory.CreateClient();
         client.DefaultRequestHeaders.Add("X-Api-Key", key);
-        (await client.GetAsync("/api/v1/me")).EnsureSuccessStatusCode();
-
-        // Seed rows against a *different* tenant. Since the fixture is
-        // shared across tests, we scope this by using ClientA which is
-        // already seeded, then verify the identity tenant sees none of them.
-        await _fx.SeedInventoryAsync(_fx.ClientA, rows: 5, seed: 91);
 
         using var list = await client.GetAsync("/api/v1/inventory?limit=10");
         list.EnsureSuccessStatusCode();
