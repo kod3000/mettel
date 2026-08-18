@@ -65,7 +65,8 @@ public static class InventoryEndpoints
         CancellationToken ct,
         DateTimeOffset? since,
         Guid? sinceId,
-        int? limit)
+        int? limit,
+        string? dir)
     {
         if (tenant.ClientId is not Guid clientId) return Problem.Unauthorized();
 
@@ -76,9 +77,16 @@ public static class InventoryEndpoints
             errors["since"] = new[] { "since and sinceId must be supplied together." };
         if (limit is int l && (l < 1 || l > SnapshotHandler.MaxLimit))
             errors["limit"] = new[] { $"Must be between 1 and {SnapshotHandler.MaxLimit}." };
+        bool desc = false;
+        if (dir is not null)
+        {
+            if (string.Equals(dir, "desc", StringComparison.OrdinalIgnoreCase)) desc = true;
+            else if (string.Equals(dir, "asc", StringComparison.OrdinalIgnoreCase)) desc = false;
+            else errors["dir"] = new[] { "Must be asc or desc." };
+        }
         if (errors.Count > 0) return Problem.ValidationFailed(errors);
 
-        var res = await handler.Handle(clientId, since, sinceId, limit, ct);
+        var res = await handler.Handle(clientId, since, sinceId, limit, desc, ct);
         return Results.Ok(res);
     }
 

@@ -7,15 +7,22 @@ namespace Bruin.Api.Features.Inventory;
 
 // Snapshot read path used by the WASM client to hydrate a local SQLite mirror
 // and pull deltas afterward. Distinct from ListHandler on two axes:
-//   - Cursor is (updated_at, id), always ASC — a monotonically-advancing
-//     watermark the client stores after each successful batch. Not opaque,
-//     not HMAC-signed: the client owns it and includes it verbatim.
+//   - Cursor is (updated_at, id) — a client-owned watermark. Not opaque,
+//     not HMAC-signed: the client stores it and includes it verbatim.
 //   - Tombstones are included. `deleted_at IS NOT NULL` rows still ship,
 //     so the client can remove them from its local mirror.
 //
+// Two directions:
+//   - dir=asc  (default) — watermark-forward. `since` selects rows with
+//     (updated_at, id) > (since, sinceId). This is the delta path.
+//   - dir=desc — newest-first. `since` (when supplied) selects rows with
+//     (updated_at, id) < (since, sinceId). This is the initial-bulk path:
+//     the client wants the most-recent slice of the tenant's inventory
+//     without hydrating everything, and pages backward from the head.
+//
 // The index ix_inventory_client_updated_id (client_id, updated_at, id) covers
-// this scan directly — same locality guarantee as ListHandler's created_at
-// path. Cap defaults to 5000 rows per call so large hydrations page cleanly.
+// both directions directly. Cap defaults to 5000 rows per call so large
+// hydrations page cleanly.
 public sealed class SnapshotHandler(IReadRouter db)
 {
     public const int MaxLimit = 5000;
@@ -26,6 +33,7 @@ public sealed class SnapshotHandler(IReadRouter db)
         DateTimeOffset? sinceTs,
         Guid? sinceId,
         int? limit,
+        bool desc,
         CancellationToken ct)
     {
         var take = Math.Clamp(limit ?? DefaultLimit, 1, MaxLimit);
@@ -33,13 +41,16 @@ public sealed class SnapshotHandler(IReadRouter db)
         p.Add("clientId", clientId);
         p.Add("take", take + 1);   // fetch one extra to know hasMore
 
+        var cmp = desc ? "<" : ">";
+        var orderDir = desc ? "DESC" : "ASC";
+
         var where = "client_id = @clientId";
         if (sinceTs is DateTimeOffset ts && sinceId is Guid sid)
         {
             p.Add("since_ts", ts);
             p.Add("since_id", sid);
             // Row-value comparison rides the (client_id, updated_at, id) index.
-            where += " AND (updated_at, id) > (@since_ts, @since_id)";
+            where += $" AND (updated_at, id) {cmp} (@since_ts, @since_id)";
         }
 
         const string cols =
@@ -51,7 +62,7 @@ public sealed class SnapshotHandler(IReadRouter db)
             SELECT {cols}
             FROM public.inventory
             WHERE {where}
-            ORDER BY updated_at ASC, id ASC
+            ORDER BY updated_at {orderDir}, id {orderDir}
             LIMIT @take";
 
         var sw = Stopwatch.StartNew();

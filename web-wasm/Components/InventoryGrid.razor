@@ -77,6 +77,19 @@
                     Loading more…
                 </div>
             }
+            else if (_rows.Count == 0 && UseLocal() && LocalSliceIsPartial())
+            {
+                @* Zero hits in Local mode with a partial slice could be
+                   the slice, not the data. Surface the tradeoff and offer
+                   a one-click flip so the operator can prove it either way. *@
+                <div class="local-slice-hint">
+                    <strong>No matches in the local slice.</strong>
+                    Your mirror holds the most-recently-updated
+                    @Replica.RowCount.ToString("N0") rows;
+                    older matches may exist on the server.
+                    <button class="btn btn-mini" @onclick='() => OnModeChanged("server")'>Search server</button>
+                </div>
+            }
             else if (!_hasMore && _rows.Count > 0)
             {
                 <div style="padding:10px;text-align:center;font-size:12px;color:var(--slate-400)">
@@ -93,6 +106,13 @@
         padding: 6px 16px; border-bottom: 1px solid var(--slate-100);
     }
     .grid-header .col.no-sort { cursor: default; }
+    .local-slice-hint {
+        margin: 16px; padding: 12px 14px;
+        background: #ecfdf5; border: 1px solid #a7f3d0;
+        border-radius: 6px; font-size: 13px; color: var(--slate-700);
+        display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    }
+    .local-slice-hint strong { color: #065f46; }
     .hidden-match-chip {
         position: absolute; right: 8px; top: 50%;
         transform: translateY(-50%);
@@ -333,6 +353,9 @@
                 _filtered = res.FilteredCount;
                 _total = res.TotalEstimate;
                 _tookMs = res.TookMs;
+                // Share the tenant total with LocalReplica so the chip can
+                // render "N of M · recent" instead of a bare row count.
+                if (res.TotalEstimate is { Value: var v }) Replica.SetServerRowsHint(v);
             }
         }
         catch (OperationCanceledException) { }
@@ -386,6 +409,11 @@
     }
 
     private bool UseLocal() => _mode == "local" && Replica.IsReady;
+
+    // "Local slice is smaller than the tenant" — used to decide whether a
+    // zero-result search is honestly empty or just outside the cached window.
+    private bool LocalSliceIsPartial() =>
+        Replica.ServerRowsHint is long total && Replica.RowCount < total;
 
     private LocalReplica.LocalListParams ToLocalParams(int offset) => new(
         Q: Value.Q,

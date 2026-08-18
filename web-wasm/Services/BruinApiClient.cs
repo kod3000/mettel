@@ -65,10 +65,13 @@ public sealed class BruinApiClient
     }
 
     // Snapshot feed for local-replica hydration + delta sync. Cursor is the
-    // pair (since, sinceId) from the previous response's Next* fields; both
-    // null on the first call means "start from the beginning of the tenant."
+    // pair (since, sinceId) from the previous response's Next* fields.
+    // `dir=desc` walks backward from newest; the client uses this for the
+    // initial bulk pull so the local slice is the most-recent rows rather
+    // than the oldest. `dir=asc` (default) is the delta path.
     public async Task<SnapshotResponse> SnapshotAsync(
-        DateTimeOffset? since, string? sinceId, int? limit, CancellationToken ct = default)
+        DateTimeOffset? since, string? sinceId, int? limit,
+        string? dir = null, CancellationToken ct = default)
     {
         var qs = HttpUtility.ParseQueryString(string.Empty);
         // Round-trip `since` as ISO-8601 so the server's DateTimeOffset
@@ -76,6 +79,7 @@ public sealed class BruinApiClient
         if (since.HasValue) qs["since"] = since.Value.ToString("O");
         if (!string.IsNullOrEmpty(sinceId)) qs["sinceId"] = sinceId;
         if (limit.HasValue) qs["limit"] = limit.Value.ToString();
+        if (!string.IsNullOrEmpty(dir)) qs["dir"] = dir;
 
         var url = $"api/v1/inventory/snapshot?{qs}";
         using var res = await _http.GetAsync(url, ct);

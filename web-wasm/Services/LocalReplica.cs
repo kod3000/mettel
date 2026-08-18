@@ -27,14 +27,41 @@ public sealed class LocalReplica
     private readonly ErrorReporter _errors;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    // Open DB descriptor + last-known watermark for delta pulls. Rebuilt
-    // per tenant.
+    // Open DB descriptor + watermarks. Rebuilt per tenant.
+    //
+    // The mirror is a "recent slice" cache — we hold at most MaxRows and
+    // keep the most-recently-updated ones. Two watermarks track the slice:
+    //   - _latestWatermark: the *newest* (updated_at, id) we have locally.
+    //     Delta pulls advance forward from here (dir=asc, since=latest).
+    //   - _oldestWatermark: the *oldest* (updated_at, id) we have locally.
+    //     Backfill pulls extend the slice backward (dir=desc, since=oldest)
+    //     until MaxRows is hit. Not surfaced today; wired for future use.
     private Guid? _clientId;
     private string? _dbName;
-    private DateTimeOffset? _watermark;
-    private string? _watermarkId;
+    private DateTimeOffset? _latestWatermark;
+    private string? _latestWatermarkId;
+    private DateTimeOffset? _oldestWatermark;
+    private string? _oldestWatermarkId;
     private long _rowCount;
     private DateTimeOffset? _lastSyncAt;
+
+    // Cap the local slice. In-memory SQLite (OPFS unavailable) tops out
+    // around 500 MB of WASM heap; ~100k rows × ~400 B leaves headroom for
+    // indexes, JS marshalling churn, and Blazor GC. Callers can raise this
+    // when OPFS SAH-pool is confirmed active (persists to disk instead).
+    public const int DefaultMaxRows = 100_000;
+
+    // Optional server-total hint, set by the grid off its most recent
+    // ListResponse.totalEstimate. Powers the "N of M · recent" chip label
+    // so the operator sees the slice size against the true tenant total.
+    // Null until the grid has heard from the server at least once.
+    public long? ServerRowsHint { get; private set; }
+    public void SetServerRowsHint(long value)
+    {
+        if (ServerRowsHint == value) return;
+        ServerRowsHint = value;
+        Changed?.Invoke();
+    }
 
     public LocalReplica(IJSRuntime js, BruinApiClient api, ErrorReporter errors)
     {
@@ -69,15 +96,24 @@ public sealed class LocalReplica
         await _js.InvokeVoidAsync("bruinDb.exec", ct, _dbName, EnsureSchemaSql);
 
         // Restore counters from what's already on disk. First open of a
-        // fresh tenant lands here with rowCount=0 and null watermark.
+        // fresh tenant lands here with rowCount=0 and null watermarks.
         _rowCount = await ScalarLongAsync("SELECT COUNT(*) FROM inventory", ct);
-        var wm = await ScalarStringAsync(
-            "SELECT COALESCE(MAX(updated_at), '') || '|' || COALESCE((" +
-            "  SELECT id FROM inventory WHERE updated_at = (SELECT MAX(updated_at) FROM inventory) " +
-            "  ORDER BY id DESC LIMIT 1), '') " +
-            "FROM inventory", ct);
-        (_watermark, _watermarkId) = ParseWatermark(wm);
+        (_latestWatermark, _latestWatermarkId) = await LoadWatermarkAsync(desc: true, ct);
+        (_oldestWatermark, _oldestWatermarkId) = await LoadWatermarkAsync(desc: false, ct);
         Changed?.Invoke();
+    }
+
+    // Read the (updated_at, id) pair at the head or tail of the local
+    // slice. `desc=true` returns the newest row (latest watermark);
+    // `desc=false` returns the oldest row (backfill anchor).
+    private async Task<(DateTimeOffset?, string?)> LoadWatermarkAsync(
+        bool desc, CancellationToken ct)
+    {
+        var order = desc ? "DESC" : "ASC";
+        var raw = await ScalarStringAsync(
+            $"SELECT updated_at || '|' || id FROM inventory " +
+            $"ORDER BY updated_at {order}, id {order} LIMIT 1", ct);
+        return ParseWatermark(raw);
     }
 
     public async Task CloseAsync()
@@ -87,8 +123,10 @@ public sealed class LocalReplica
         // enough. `wipe` is the explicit "delete the file" path (below).
         _clientId = null;
         _dbName = null;
-        _watermark = null;
-        _watermarkId = null;
+        _latestWatermark = null;
+        _latestWatermarkId = null;
+        _oldestWatermark = null;
+        _oldestWatermarkId = null;
         _rowCount = 0;
         _lastSyncAt = null;
         Changed?.Invoke();
@@ -105,51 +143,121 @@ public sealed class LocalReplica
 
     // ---- Hydration + delta sync ----------------------------------------
 
-    // Pulls the snapshot feed to catch up to the server. Yields progress
-    // after each successful batch. Safe to call repeatedly; a no-op call
-    // is fast because the watermark short-circuits the server's WHERE.
+    // Bring the local mirror up-to-date with the server. Two phases:
+    //
+    //   1. DELTA (dir=asc, since=latest)   — always run first. Cheap when
+    //      the mirror is already close to head; pulls anything newer than
+    //      our latest watermark and advances it.
+    //   2. BACKFILL (dir=desc, since=oldest) — extends the slice backward
+    //      until either we hit MaxRows or the server signals HasMore=false.
+    //      On an empty mirror this is the initial bulk pull; on a partial
+    //      mirror it's a widen-the-window.
+    //
+    // Each batch's JSON payload is released between iterations so the JS
+    // heap doesn't accumulate — a full ~100k hydrate then holds only the
+    // SQLite pages + one in-flight batch worth of transient allocations.
     public async Task HydrateAsync(
         IProgress<HydrationProgress>? progress,
+        int maxRows = DefaultMaxRows,
         CancellationToken ct = default)
     {
         if (_dbName is null) throw new InvalidOperationException("Call OpenAsync first.");
 
         int batches = 0;
         long total = 0;
-        while (!ct.IsCancellationRequested)
+        bool hasMore = false;
+        long lastBatchMs = 0;
+
+        // Phase 1: delta forward from the newest we already have. Skipped
+        // when the mirror is empty (no watermark to advance from).
+        if (_latestWatermark is not null)
         {
-            SnapshotResponse batch;
-            try
+            while (!ct.IsCancellationRequested)
             {
-                batch = await _api.SnapshotAsync(_watermark, _watermarkId, limit: 5000, ct);
+                var batch = await FetchSnapshotAsync(
+                    since: _latestWatermark, sinceId: _latestWatermarkId,
+                    dir: "asc", ct: ct);
+                lastBatchMs = batch.TookMs;
+                hasMore = batch.HasMore;
+
+                if (batch.Rows.Count > 0)
+                {
+                    await UpsertBatchAsync(batch.Rows, ct);
+                    _latestWatermark = batch.NextSince ?? _latestWatermark;
+                    _latestWatermarkId = batch.NextSinceId ?? _latestWatermarkId;
+                    total += batch.Rows.Count;
+                    batches++;
+                }
+                await ReportProgressAsync(progress, batches, total, hasMore, lastBatchMs, ct);
+                if (!batch.HasMore) break;
             }
-            catch (ApiException ex)
-            {
-                _errors.Report(ex, "snapshot");
-                throw;
-            }
+        }
+
+        // Phase 2: backfill from head-newest downward until we hit the
+        // slice cap. On an empty mirror this uses no `since` and starts
+        // at the very newest row; on a partial mirror we resume from the
+        // oldest we already have to keep extending the window.
+        while (!ct.IsCancellationRequested && _rowCount < maxRows)
+        {
+            var remaining = (int)Math.Min(5000, maxRows - _rowCount);
+            var batch = await FetchSnapshotAsync(
+                since: _oldestWatermark, sinceId: _oldestWatermarkId,
+                dir: "desc", limit: remaining, ct: ct);
+            lastBatchMs = batch.TookMs;
+            hasMore = batch.HasMore;
 
             if (batch.Rows.Count > 0)
             {
                 await UpsertBatchAsync(batch.Rows, ct);
-                _watermark = batch.NextSince ?? _watermark;
-                _watermarkId = batch.NextSinceId ?? _watermarkId;
+                _oldestWatermark = batch.NextSince ?? _oldestWatermark;
+                _oldestWatermarkId = batch.NextSinceId ?? _oldestWatermarkId;
+                // The first batch of an empty mirror also seeds the "latest"
+                // watermark — the DESC pull's first row IS the newest.
+                if (_latestWatermark is null && batch.Rows.Count > 0)
+                {
+                    _latestWatermark = batch.Rows[0].UpdatedAt;
+                    _latestWatermarkId = batch.Rows[0].Id;
+                }
                 total += batch.Rows.Count;
                 batches++;
             }
-            _lastSyncAt = DateTimeOffset.UtcNow;
-            _rowCount = await ScalarLongAsync(
-                "SELECT COUNT(*) FROM inventory WHERE deleted_at IS NULL", ct);
-            progress?.Report(new HydrationProgress(
-                Batches: batches,
-                RowsThisRun: total,
-                RowsInMirror: _rowCount,
-                HasMore: batch.HasMore,
-                LastBatchMs: batch.TookMs));
-            Changed?.Invoke();
-
+            await ReportProgressAsync(progress, batches, total, hasMore, lastBatchMs, ct);
             if (!batch.HasMore) break;
         }
+    }
+
+    // Single-batch snapshot fetch with error routing. Kept separate so
+    // both phases share cancellation + ApiException handling.
+    private async Task<SnapshotResponse> FetchSnapshotAsync(
+        DateTimeOffset? since, string? sinceId, string dir,
+        int limit = 5000, CancellationToken ct = default)
+    {
+        try
+        {
+            return await _api.SnapshotAsync(since, sinceId, limit, dir, ct);
+        }
+        catch (ApiException ex)
+        {
+            _errors.Report(ex, "snapshot");
+            throw;
+        }
+    }
+
+    private async Task ReportProgressAsync(
+        IProgress<HydrationProgress>? progress,
+        int batches, long total, bool hasMore, long lastBatchMs,
+        CancellationToken ct)
+    {
+        _lastSyncAt = DateTimeOffset.UtcNow;
+        _rowCount = await ScalarLongAsync(
+            "SELECT COUNT(*) FROM inventory WHERE deleted_at IS NULL", ct);
+        progress?.Report(new HydrationProgress(
+            Batches: batches,
+            RowsThisRun: total,
+            RowsInMirror: _rowCount,
+            HasMore: hasMore,
+            LastBatchMs: lastBatchMs));
+        Changed?.Invoke();
     }
 
     // ---- Read path ------------------------------------------------------
