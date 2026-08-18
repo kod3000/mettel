@@ -1,6 +1,10 @@
+using System.Collections.Concurrent;
+using Bruin.Api.Features.Tenancy;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
 using NpgsqlTypes;
 using Testcontainers.PostgreSql;
@@ -17,6 +21,11 @@ public sealed class PostgresFixture : IAsyncLifetime
     private PostgreSqlContainer? _pg;
     public string ConnString { get; private set; } = "";
     public BruinAppFactory Factory { get; private set; } = null!;
+
+    // Programmable stand-in for mt-oidc's /resolve endpoint. Tests set
+    // per-key responses here and the DI graph hands the same instance
+    // to the fallback resolver.
+    public StubIdentityResolver IdentityStub { get; } = new();
 
     public Guid ClientA { get; } = Guid.Parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
     public Guid ClientB { get; } = Guid.Parse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
@@ -42,7 +51,7 @@ public sealed class PostgresFixture : IAsyncLifetime
         await _pg.StartAsync();
         ConnString = _pg.GetConnectionString();
 
-        Factory = new BruinAppFactory(ConnString);
+        Factory = new BruinAppFactory(ConnString, IdentityStub);
         // Force the app to boot so migrations run.
         _ = Factory.Server;
 
@@ -205,11 +214,18 @@ public sealed class PostgresFixture : IAsyncLifetime
 }
 
 // WebApplicationFactory that overrides the app's connection strings so it
-// talks to the Testcontainers Postgres rather than the compose one.
+// talks to the Testcontainers Postgres rather than the compose one, and
+// swaps in a controllable stand-in for the identity /resolve fallback.
 public sealed class BruinAppFactory : WebApplicationFactory<Program>
 {
     private readonly string _conn;
-    public BruinAppFactory(string conn) { _conn = conn; }
+    private readonly StubIdentityResolver _identityStub;
+
+    public BruinAppFactory(string conn, StubIdentityResolver identityStub)
+    {
+        _conn = conn;
+        _identityStub = identityStub;
+    }
 
     protected override void ConfigureWebHost(IWebHostBuilder b)
     {
@@ -222,6 +238,42 @@ public sealed class BruinAppFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("BRUIN_UPLOAD_DIR",
             Path.Combine(Path.GetTempPath(), "bruin-tests-uploads"));
         b.UseEnvironment("Testing");
+
+        // Replace the HttpClient-backed identity resolver with the stub
+        // the fixture owns so tests can dictate what /resolve returns.
+        b.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IIdentityResolver>();
+            services.AddSingleton<IIdentityResolver>(_identityStub);
+        });
+    }
+}
+
+// Test double for IIdentityResolver. Default response is null (matches
+// production behaviour when the identity service doesn't know the key).
+// Tests call SetResponse to script per-key answers.
+public sealed class StubIdentityResolver : IIdentityResolver
+{
+    private readonly ConcurrentDictionary<string, IdentityResolution?> _responses =
+        new(StringComparer.Ordinal);
+    private int _callCount;
+
+    public int CallCount => _callCount;
+
+    public void SetResponse(string apiKey, IdentityResolution? resolution)
+        => _responses[apiKey] = resolution;
+
+    public void Reset()
+    {
+        _responses.Clear();
+        Interlocked.Exchange(ref _callCount, 0);
+    }
+
+    public Task<IdentityResolution?> ResolveAsync(string apiKey, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _callCount);
+        _responses.TryGetValue(apiKey, out var r);
+        return Task.FromResult(r);
     }
 }
 

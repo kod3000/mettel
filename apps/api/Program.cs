@@ -76,7 +76,22 @@ builder.Services.AddSingleton<TenantRowEstimator>();
 // Scoped per-request context: tenant + LSN watermark.
 builder.Services.AddScoped<ITenantContext, TenantContext>();
 builder.Services.AddScoped<ILsnContext, LsnContext>();
-builder.Services.AddScoped<IApiKeyResolver, ApiKeyResolver>();
+// Local api_key + client resolver, plus a typed HttpClient that asks
+// mt-oidc's /resolve for keys the local table doesn't know. The
+// decorator (registered as IApiKeyResolver below) tries local first
+// and only falls back to identity on a miss — hot path stays offline.
+builder.Services.AddScoped<ApiKeyResolver>();
+var identityBaseUrl = builder.Configuration["Identity:BaseUrl"]
+    ?? Environment.GetEnvironmentVariable("BRUIN_IDENTITY_URL")
+    ?? "https://auth.mettel.exercise.dany.codes";
+builder.Services.AddHttpClient<IIdentityResolver, HttpIdentityResolver>(c =>
+{
+    c.BaseAddress = new Uri(identityBaseUrl.TrimEnd('/') + "/");
+    // Auth must never block on a slow identity service — fail fast and
+    // return a 401 rather than hanging the whole request.
+    c.Timeout = TimeSpan.FromSeconds(5);
+});
+builder.Services.AddScoped<IApiKeyResolver, ApiKeyResolverWithFallback>();
 
 // Scoped read router — depends on the scoped LsnContext to pick primary vs
 // replica per request. Handlers depend on IReadRouter, not IDbConnections.

@@ -27,3 +27,4 @@ pg-replica-data/
 bench/results-*.md
 !bench/results.md
 *.log
+web-wasm/package-lock.json
