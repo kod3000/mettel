@@ -6,8 +6,14 @@ import type { Role } from "../tenants.js";
 // consumers get the union instead of the API's flat `string`. The API
 // enforces the role vocabulary via a CHECK constraint on api_key.role, so
 // widening back to `string` is safe as far as the server is concerned.
+// `clientName` was added to MeResponse server-side after the last
+// api-types regen — override locally so the SPA can consume it without
+// waiting on the codegen pipeline to catch up.
 type WireMe = components["schemas"]["MeResponse"];
-export type MeResponse = Omit<WireMe, "role"> & { role: Role };
+export type MeResponse = Omit<WireMe, "role"> & {
+    role: Role;
+    clientName: string;
+};
 
 // Fetches GET /api/v1/me once per apiKey. The AppShell is remounted when
 // tenant or role changes (key={tenant:role}), so a fresh key = fresh mount

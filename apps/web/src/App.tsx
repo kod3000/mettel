@@ -22,7 +22,8 @@ import { Toaster } from "./components/Toaster.js";
 import { LsnStatusBar } from "./components/LsnStatusBar.js";
 import { DevPanel } from "./components/DevPanel.js";
 import {
-    apiKeyForRole, loadRole, loadTenant, saveRole, saveTenant,
+    apiKeyForRole, loadCustomKey, loadRole, loadTenant,
+    saveCustomKey, saveRole, saveTenant,
     type Role, type Tenant,
 } from "./tenants.js";
 import type { InventoryRow, ListParams } from "./api/inventory.js";
@@ -53,12 +54,15 @@ function saveGpuHover(on: boolean): void {
 export default function App() {
     const [tenant, setTenant] = useState<Tenant>(() => loadTenant());
     const [role, setRole] = useState<Role>(() => loadRole());
+    const [customKey, setCustomKey] = useState<string | null>(() => loadCustomKey());
     return (
         <AppShell
             tenant={tenant}
             role={role}
+            customKey={customKey}
             onTenantChange={(t) => { saveTenant(t); setTenant(t); }}
             onRoleChange={(r) => { saveRole(r); setRole(r); }}
+            onCustomKeyChange={(k) => { saveCustomKey(k); setCustomKey(k); }}
         />
     );
 }
@@ -66,10 +70,14 @@ export default function App() {
 // AppShell is keyed on tenant + role so switching either remounts the whole
 // tree — every hook state, every query cache, every LSN watermark starts
 // fresh. Simpler and safer than reaching into caches to purge tenant-A rows.
-function AppShell({ tenant, role, onTenantChange, onRoleChange }: {
-    tenant: Tenant; role: Role;
+function AppShell({
+    tenant, role, customKey,
+    onTenantChange, onRoleChange, onCustomKeyChange,
+}: {
+    tenant: Tenant; role: Role; customKey: string | null;
     onTenantChange: (t: Tenant) => void;
     onRoleChange: (r: Role) => void;
+    onCustomKeyChange: (k: string | null) => void;
 }) {
     const [params, setParams] = useState<ListParams>({ pageSize: 100 });
     const [createOpen, setCreateOpen] = useState(false);
@@ -98,7 +106,10 @@ function AppShell({ tenant, role, onTenantChange, onRoleChange }: {
         return () => window.removeEventListener("beforeunload", onBeforeUnload);
     }, []);
 
-    const apiKey = BUILT_IN_OVERRIDE ?? apiKeyForRole(tenant, role);
+    // Precedence: build-time env > user-pasted custom key > demo picker.
+    // The server's IdentityFallback resolver accepts any key /resolve
+    // vouches for, so a valid identity key wins with no further wiring.
+    const apiKey = BUILT_IN_OVERRIDE ?? customKey ?? apiKeyForRole(tenant, role);
 
     const client = useMemo(() => createClient({
         apiKey,
@@ -117,6 +128,7 @@ function AppShell({ tenant, role, onTenantChange, onRoleChange }: {
                     tenant={tenant}
                     role={role}
                     apiKey={apiKey}
+                    customKey={customKey}
                     params={params}
                     setParams={setParams}
                     createOpen={createOpen}
@@ -131,6 +143,7 @@ function AppShell({ tenant, role, onTenantChange, onRoleChange }: {
                     setGpuHover={setGpuHoverPersistent}
                     onTenantChange={onTenantChange}
                     onRoleChange={onRoleChange}
+                    onCustomKeyChange={onCustomKeyChange}
                 />
             </QueryClientProvider>
         </ApiContext.Provider>
@@ -139,7 +152,7 @@ function AppShell({ tenant, role, onTenantChange, onRoleChange }: {
 
 // Split so useMe() (needs the QueryClient) sits inside the provider.
 function AppShellInner(props: {
-    tenant: Tenant; role: Role; apiKey: string;
+    tenant: Tenant; role: Role; apiKey: string; customKey: string | null;
     params: ListParams; setParams: (p: ListParams) => void;
     createOpen: boolean; setCreateOpen: (v: boolean) => void;
     selectedRow: InventoryRow | null; setSelectedRow: (r: InventoryRow | null) => void;
@@ -148,12 +161,13 @@ function AppShellInner(props: {
     gpuHover: boolean; setGpuHover: (v: boolean) => void;
     onTenantChange: (t: Tenant) => void;
     onRoleChange: (r: Role) => void;
+    onCustomKeyChange: (k: string | null) => void;
 }) {
     const {
-        tenant, role, apiKey, params, setParams, createOpen, setCreateOpen,
+        tenant, role, apiKey, customKey, params, setParams, createOpen, setCreateOpen,
         selectedRow, setSelectedRow, apiRefOpen, setApiRefOpen,
         devOpen, setDevOpen,
-        gpuHover, setGpuHover, onTenantChange, onRoleChange,
+        gpuHover, setGpuHover, onTenantChange, onRoleChange, onCustomKeyChange,
     } = props;
 
     const me = useMe(apiKey);
@@ -165,7 +179,7 @@ function AppShellInner(props: {
     const adminOnlyFields = me.data?.adminOnlyFields ?? [];
 
     return (
-        <div key={`${tenant.id}:${role}`} className="h-screen flex flex-col bg-slate-50 text-slate-900">
+        <div key={customKey ?? `${tenant.id}:${role}`} className="h-screen flex flex-col bg-slate-50 text-slate-900">
             <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-3 shadow-sm">
                 <div className="flex-1">
                     <h1 className="text-base font-semibold tracking-tight">Bruin Inventory Grid</h1>
@@ -186,8 +200,13 @@ function AppShellInner(props: {
                 <ClientPicker
                     tenant={tenant}
                     role={role}
+                    customKey={customKey}
                     onTenantChange={onTenantChange}
                     onRoleChange={onRoleChange}
+                    onCustomKeyChange={onCustomKeyChange}
+                    resolved={me.data
+                        ? { clientName: me.data.clientName, role: me.data.role }
+                        : null}
                 />
                 <a
                     href="https://wasm.mettel.exercise.dany.codes/"

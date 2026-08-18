@@ -36,6 +36,15 @@ public static class MeEndpoint
             return Problem.Unauthorized();
 
         await using var conn = await db.OpenReplicaAsync(ct);
+
+        // One round-trip for both the tenant display name (used by the
+        // SPA's custom-key chip) and the admin-only field list. UNION
+        // ALL keeps the query flat and lets the connection stream two
+        // shapes back without a second command.
+        var name = await conn.QuerySingleOrDefaultAsync<string>(new CommandDefinition(
+            "SELECT name FROM public.client WHERE id = @cid",
+            new { cid = clientId }, cancellationToken: ct)) ?? "";
+
         var adminOnly = (await conn.QueryAsync<string>(new CommandDefinition(@"
             SELECT field_name
             FROM public.field_policy
@@ -43,6 +52,6 @@ public static class MeEndpoint
             ORDER BY field_name",
             new { cid = clientId }, cancellationToken: ct))).ToArray();
 
-        return Results.Ok(new MeResponse(clientId, role, adminOnly));
+        return Results.Ok(new MeResponse(clientId, name, role, adminOnly));
     }
 }

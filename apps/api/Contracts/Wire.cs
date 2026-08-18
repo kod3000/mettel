@@ -14,8 +14,12 @@ public sealed record DebugLsnResponse(
     bool Reachable);
 
 // GET /api/v1/me — SPA fetches once on mount to gate role-restricted UI.
+// `ClientName` mirrors `client.name` so the SPA can render which tenant a
+// pasted custom key resolved to; empty string when the client row has no
+// name set (older seed rows).
 public sealed record MeResponse(
     Guid ClientId,
+    string ClientName,
     string Role,
     IReadOnlyList<string> AdminOnlyFields);
 

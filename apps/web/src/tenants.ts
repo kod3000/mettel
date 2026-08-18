@@ -37,6 +37,28 @@ export function apiKeyForRole(tenant: Tenant, role: Role): string {
 
 const TENANT_STORAGE_KEY = "bruin.tenant";
 const ROLE_STORAGE_KEY   = "bruin.role";
+const CUSTOM_KEY_STORAGE_KEY = "bruin.customKey";
+
+// A user-supplied X-Api-Key that overrides the built-in Client + Role
+// picker. Populated by pasting a key issued by the identity console
+// (auth.mettel.exercise.dany.codes). Empty / null means "use the demo
+// picker". The API's IdentityFallback resolver on the grid recognises
+// any key that /resolve accepts, so this is enough to sign in with a
+// real tenant without editing localStorage by hand.
+export function loadCustomKey(): string | null {
+    if (typeof window === "undefined") return null;
+    const v = window.localStorage.getItem(CUSTOM_KEY_STORAGE_KEY);
+    return v && v.trim().length > 0 ? v : null;
+}
+
+export function saveCustomKey(key: string | null): void {
+    if (typeof window === "undefined") return;
+    if (!key || key.trim().length === 0) {
+        window.localStorage.removeItem(CUSTOM_KEY_STORAGE_KEY);
+    } else {
+        window.localStorage.setItem(CUSTOM_KEY_STORAGE_KEY, key.trim());
+    }
+}
 
 export function loadTenant(): Tenant {
     if (typeof window === "undefined") return DEFAULT_TENANT;
