@@ -69,9 +69,13 @@ public sealed class CursorCodec
     {
         // Order-stable: sort array values so ?status=a&status=b hashes the same
         // as ?status=b&status=a — the API contract treats them as OR sets.
+        // `fields` participates too — narrowing the search columns mid-scroll
+        // shifts the row set under the caller, so a cursor issued for one
+        // fields= subset must not be honored for another.
         var obj = new SortedDictionary<string, object?>(StringComparer.Ordinal)
         {
             ["q"] = q.Q,
+            ["fields"]     = q.Fields.OrderBy(s => s, StringComparer.Ordinal).ToArray(),
             ["statuses"]   = q.Statuses.OrderBy(s => s, StringComparer.Ordinal).ToArray(),
             ["categories"] = q.Categories.OrderBy(s => s, StringComparer.Ordinal).ToArray(),
             ["states"]     = q.States.OrderBy(s => s, StringComparer.Ordinal).ToArray(),

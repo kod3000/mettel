@@ -14,6 +14,10 @@ public static class InventoryEndpoints
             .Produces<Contracts.ListResponse>()
             .ProducesProblem(400)
             .ProducesProblem(401);
+        r.MapGet("/api/v1/inventory/snapshot", SnapshotInventoryAsync)
+            .Produces<Contracts.SnapshotResponse>()
+            .ProducesProblem(400)
+            .ProducesProblem(401);
         r.MapGet("/api/v1/inventory/{id:guid}", GetInventoryAsync)
             .Produces<Contracts.InventoryRow>()
             .ProducesProblem(404);
@@ -49,6 +53,33 @@ public static class InventoryEndpoints
     {
         if (tenant.ClientId is not Guid clientId) return Task.FromResult(Problem.Unauthorized());
         return h.GetAsync(clientId, id, ct);
+    }
+
+    // Snapshot endpoint feeds the WASM client's local SQLite mirror. `since`
+    // + `sinceId` come from the client's last-persisted watermark; both null
+    // means "start from the beginning". Includes tombstones (deleted rows)
+    // so the mirror can tombstone in step with the primary.
+    private static async Task<IResult> SnapshotInventoryAsync(
+        ITenantContext tenant,
+        SnapshotHandler handler,
+        CancellationToken ct,
+        DateTimeOffset? since,
+        Guid? sinceId,
+        int? limit)
+    {
+        if (tenant.ClientId is not Guid clientId) return Problem.Unauthorized();
+
+        var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+        // Both watermarks must be supplied together — a bare `since` without
+        // `sinceId` would page-skip on same-timestamp rows.
+        if ((since is null) != (sinceId is null))
+            errors["since"] = new[] { "since and sinceId must be supplied together." };
+        if (limit is int l && (l < 1 || l > SnapshotHandler.MaxLimit))
+            errors["limit"] = new[] { $"Must be between 1 and {SnapshotHandler.MaxLimit}." };
+        if (errors.Count > 0) return Problem.ValidationFailed(errors);
+
+        var res = await handler.Handle(clientId, since, sinceId, limit, ct);
+        return Results.Ok(res);
     }
 
     private static Task<IResult> CreateInventoryAsync(

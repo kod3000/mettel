@@ -47,6 +47,34 @@ public sealed record ListResponse(
     CountEnvelope? FilteredCount,
     long TookMs);
 
+// Snapshot rows for the local-replica hydration/delta protocol.
+// Adds `deletedAt` so the client can tombstone rows from its local mirror.
+public sealed record SnapshotRow(
+    Guid Id,
+    string ServiceNumber,
+    string ProductCategory,
+    string ProductName,
+    string Status,
+    string? City,
+    string? State,
+    string? Address,
+    string? Assignee,
+    string? Notes,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    int RowVersion,
+    DateTimeOffset? DeletedAt);
+
+// The client persists (NextSince, NextSinceId) after each successful page
+// and re-issues them as `since` / `sinceId` on the next call. When
+// HasMore=false the caller has reached the head of the tenant's inventory.
+public sealed record SnapshotResponse(
+    IReadOnlyList<SnapshotRow> Rows,
+    DateTimeOffset? NextSince,
+    Guid? NextSinceId,
+    bool HasMore,
+    long TookMs);
+
 public sealed record StatusChangeResponse(
     Guid Id,
     string Status,
