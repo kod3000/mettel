@@ -70,7 +70,7 @@ export function CreateInventoryModal({ open, onClose }: Props) {
                 <Field label="Product category" name="productCategory" error={errors.productCategory?.[0]}>
                     <select
                         value={form.productCategory ?? "voice"}
-                        onChange={(e) => setForm({ ...form, productCategory: e.target.value })}
+                        onChange={(e) => setForm({ ...form, productCategory: e.target.value as typeof form.productCategory })}
                         className={inputClasses(errors.productCategory)}
                     >
                         {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -88,7 +88,7 @@ export function CreateInventoryModal({ open, onClose }: Props) {
                 <Field label="Initial status" name="status" error={errors.status?.[0]}>
                     <select
                         value={form.status ?? "pending"}
-                        onChange={(e) => setForm({ ...form, status: e.target.value })}
+                        onChange={(e) => setForm({ ...form, status: e.target.value as typeof form.status })}
                         className={inputClasses(errors.status)}
                     >
                         {INITIAL_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}

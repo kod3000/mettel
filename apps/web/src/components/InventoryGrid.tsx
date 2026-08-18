@@ -13,13 +13,14 @@ import {
     useReactTable,
     type SortingState,
     type VisibilityState,
+    type ColumnOrderState,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { InventoryRow, ListParams } from "../api/inventory.js";
 import { useInventoryList } from "../hooks/useInventoryList.js";
 import { CountDisplay } from "./CountDisplay.js";
-import { ColumnPicker, loadColumnVisibility, saveColumnVisibility } from "./ColumnPicker.js";
+import { ColumnPicker, loadColumnVisibility, saveColumnVisibility, loadColumnOrder, saveColumnOrder } from "./ColumnPicker.js";
 
 interface Props {
     params: ListParams;
@@ -57,8 +58,6 @@ const COLUMN_META: Array<{ id: keyof InventoryRow; label: string; width: string;
 const DEFAULT_SEARCH_FIELDS: readonly (keyof InventoryRow)[] = [
     "productName", "serviceNumber", "city", "state", "address", "assignee", "notes",
 ];
-const PICKER_COLUMNS = COLUMN_META.map((c) => ({ id: c.id as string, label: c.label, required: c.required }));
-
 const columns = [
     columnHelper.accessor("serviceNumber", { header: "Service #", cell: (i) => (
         <span className="font-mono text-[12.5px] tracking-tight">{i.getValue() ?? ""}</span>
@@ -97,9 +96,13 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
         () => query.data?.pages.flatMap((p) => p.rows ?? []) ?? [],
         [query.data]);
 
-    // Column visibility — persisted per browser (not per tenant since column
-    // preference tracks the operator, not the data set).
+    // Column visibility + order — both persisted per browser (not per
+    // tenant since these track the operator, not the data set).
     const [visibility, setVisibility] = useState<VisibilityState>(() => loadColumnVisibility());
+    const [columnOrder, setColumnOrder] = useState<ColumnOrderState>(() => {
+        const saved = loadColumnOrder();
+        return saved.length > 0 ? saved : COLUMN_META.map((c) => c.id as string);
+    });
     const applyVisibility = (next: VisibilityState) => {
         // Force required columns back on if the caller cleared everything
         // via localStorage tampering — belt for the picker's disabled state.
@@ -107,25 +110,45 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
         saveColumnVisibility(next);
         setVisibility(next);
     };
+    const applyOrder = (next: string[]) => {
+        // Empty = reset — snap back to the static default and clear the
+        // persisted override.
+        const resolved = next.length === 0 ? COLUMN_META.map((c) => c.id as string) : next;
+        saveColumnOrder(next);
+        setColumnOrder(resolved);
+    };
 
-    // Derived grid-template-columns from the visible subset. Header + rows
-    // both reference this so alignment stays true when columns hide/show.
+    // Ordered COLUMN_META view — the picker's caller-supplied order plus
+    // any newly-added columns the saved order forgot. Grid + picker both
+    // consume this so alignment stays true even after a reorder.
+    const orderedMeta = useMemo(() => {
+        const byId = new Map(COLUMN_META.map((c) => [c.id as string, c]));
+        const seen = new Set<string>();
+        const out: typeof COLUMN_META = [];
+        for (const id of columnOrder) {
+            const m = byId.get(id);
+            if (m && !seen.has(id)) { out.push(m); seen.add(id); }
+        }
+        for (const m of COLUMN_META) if (!seen.has(m.id as string)) out.push(m);
+        return out;
+    }, [columnOrder]);
+    const orderedPickerColumns = useMemo(
+        () => orderedMeta.map((c) => ({ id: c.id as string, label: c.label, required: c.required })),
+        [orderedMeta]);
+
+    // Derived grid-template-columns from the ORDERED visible subset.
     const gridTemplate = useMemo(() =>
-        COLUMN_META.filter((c) => visibility[c.id] !== false).map((c) => c.width).join(" "),
-        [visibility]);
+        orderedMeta.filter((c) => visibility[c.id] !== false).map((c) => c.width).join(" "),
+        [orderedMeta, visibility]);
     const minTableWidth = useMemo(() => {
-        // Sum of numeric column widths (px), rough enough for horizontal
-        // scroll thresholds. Fractional/minmax columns count as their
-        // minimum. Prevents the layout from collapsing on very narrow
-        // viewports when few columns are visible.
         let total = 0;
-        for (const c of COLUMN_META) {
+        for (const c of orderedMeta) {
             if (visibility[c.id] === false) continue;
             const m = /(\d+)px/.exec(c.width);
             total += m ? Number(m[1]) : 200;
         }
         return `${Math.max(total, 400)}px`;
-    }, [visibility]);
+    }, [orderedMeta, visibility]);
 
     const sorting: SortingState = useMemo(() => {
         const key = params.sort ?? "createdAt";
@@ -135,13 +158,17 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
     const table = useReactTable({
         data: rows,
         columns,
-        state: { sorting, columnVisibility: visibility },
+        state: { sorting, columnVisibility: visibility, columnOrder },
         getCoreRowModel: getCoreRowModel(),
         manualSorting: true,
         manualPagination: true,
         onColumnVisibilityChange: (updater) => {
             const next = typeof updater === "function" ? updater(visibility) : updater;
             applyVisibility(next);
+        },
+        onColumnOrderChange: (updater) => {
+            const next = typeof updater === "function" ? updater(columnOrder) : updater;
+            applyOrder(next);
         },
         onSortingChange: (updater) => {
             const next = typeof updater === "function" ? updater(sorting) : updater;
@@ -222,9 +249,10 @@ export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = 
                         loaded={rows.length} />
                 </div>
                 <ColumnPicker
-                    columns={PICKER_COLUMNS}
+                    columns={orderedPickerColumns}
                     visible={visibility}
                     onChange={applyVisibility}
+                    onReorder={applyOrder}
                 />
             </div>
 

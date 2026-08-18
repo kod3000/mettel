@@ -1,0 +1,33 @@
+{
+  "$schema": "https://bruin.example/smoke-scenarios.schema.json",
+  "$comment": "Extra dev-checklist scenarios loaded at runtime by DevPanel. Adding an entry here requires ONLY a redeploy of this static file (no rebuild of the SPA). Rich scenarios that need to stash values between steps or run non-HTTP logic live in DevPanel.tsx.",
+  "scenarios": [
+    {
+      "id": "openapi-doc",
+      "name": "GET /openapi/v1.json",
+      "description": "OpenAPI spec is publicly served",
+      "method": "GET",
+      "path": "/openapi/v1.json",
+      "expectStatus": 200,
+      "expectContains": "\"openapi\":"
+    },
+    {
+      "id": "csv-template",
+      "name": "GET /inventory/csv-template",
+      "description": "Static template CSV has the required header",
+      "method": "GET",
+      "path": "/api/v1/inventory/csv-template",
+      "expectStatus": 200,
+      "expectContains": "serviceNumber,productCategory,productName,status"
+    },
+    {
+      "id": "search-multiterm",
+      "name": "Search 'fiber 10g'",
+      "description": "Multi-term tsvector AND",
+      "method": "GET",
+      "path": "/api/v1/inventory?q=fiber%2010g&pageSize=3",
+      "expectStatus": 200,
+      "expectContains": "\"rows\""
+    }
+  ]
+}

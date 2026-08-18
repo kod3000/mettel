@@ -182,28 +182,26 @@ export function BulkUploadPanel({ apiKey, canWrite }: Props) {
     return (
         <div className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-2 text-xs">
             <span className="text-slate-500">Bulk upload</span>
-            {canWrite && (
-                <>
-                    <input
-                        ref={fileRef}
-                        type="file"
-                        accept=".csv,text/csv"
-                        data-testid="bulk-file"
-                        className="text-xs file:mr-2 file:rounded-md file:border-0 file:bg-slate-100 file:px-2 file:py-1 file:text-xs file:font-medium file:text-slate-700 hover:file:bg-slate-200"
-                    />
-                    <button
-                        type="button"
-                        onClick={upload}
-                        disabled={phase === "uploading" || phase === "streaming" || phase === "polling"}
-                        className="rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-white shadow-sm hover:bg-slate-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
-                    >
-                        Upload
-                    </button>
-                </>
-            )}
-            {!canWrite && (
-                <span className="italic text-slate-400">read-only role — upload disabled</span>
-            )}
+            {/* Reader sees the same controls, disabled — reviewer letter:
+                the permission model should teach itself. */}
+            <input
+                ref={fileRef}
+                type="file"
+                accept=".csv,text/csv"
+                disabled={!canWrite}
+                title={canWrite ? undefined : "Requires admin or worker role"}
+                data-testid="bulk-file"
+                className="text-xs file:mr-2 file:rounded-md file:border-0 file:bg-slate-100 file:px-2 file:py-1 file:text-xs file:font-medium file:text-slate-700 hover:file:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            />
+            <button
+                type="button"
+                onClick={upload}
+                disabled={!canWrite || phase === "uploading" || phase === "streaming" || phase === "polling"}
+                title={canWrite ? undefined : "Requires admin or worker role"}
+                className="rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-white shadow-sm hover:bg-slate-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
+            >
+                Upload
+            </button>
             <a
                 href="#"
                 onClick={(e) => { e.preventDefault(); downloadCsv(apiKey, "/api/v1/inventory/csv-template", "inventory-template.csv"); }}

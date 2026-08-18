@@ -1,10 +1,12 @@
 @inject IJSRuntime JS
 @implements IDisposable
 
-@* Cog + checkbox popover that toggles column visibility on the grid.
-   Selection persists to localStorage under a global key so preferences
-   travel with the browser, not the tenant. Required columns render as
-   disabled checkboxes so operators can't clear the grid entirely. *@
+@* Cog + checkbox popover that toggles column visibility on the grid AND
+   lets the operator reorder columns via drag-and-drop. The picker itself
+   is stateless (owned state stays on the parent) — it displays the
+   caller-supplied order, and emits both visibility and order changes.
+   Required columns render as disabled checkboxes so operators can't
+   clear the grid entirely; they can still be reordered. *@
 
 <div class="col-picker">
     <button type="button" class="col-picker-toggle"
@@ -23,12 +25,23 @@
                 <span>Columns</span>
                 <button type="button" class="reset" @onclick="ResetAll">reset</button>
             </div>
+            <div class="col-picker-hint">Drag <span class="grip">⋮⋮</span> to reorder</div>
             <ul>
-                @foreach (var c in Columns)
+                @for (int i = 0; i < Columns.Count; i++)
                 {
+                    var idx = i;
+                    var c = Columns[i];
                     var on = IsVisible(c.Id);
                     var locked = c.Required;
-                    <li>
+                    var dragOver = _dragOverIndex == idx && _draggingIndex is not null && _draggingIndex != idx;
+                    <li class="@(dragOver ? "drag-over" : "") @(_draggingIndex == idx ? "dragging" : "")"
+                        draggable="true"
+                        @ondragstart="() => OnDragStart(idx)"
+                        @ondragover="e => OnDragOver(e, idx)" @ondragover:preventDefault="true"
+                        @ondragleave="() => OnDragLeave(idx)"
+                        @ondrop="() => OnDrop(idx)" @ondrop:preventDefault="true"
+                        @ondragend="OnDragEnd">
+                        <span class="grip" aria-hidden="true" title="Drag to reorder">⋮⋮</span>
                         <label class="@(locked ? "locked" : "")" title="@(locked ? "Required column" : null)">
                             <input type="checkbox"
                                    checked="@on"
@@ -60,7 +73,7 @@
     }
     .col-picker-menu {
         position: absolute; right: 0; top: 100%; margin-top: 4px;
-        z-index: 20; width: 220px;
+        z-index: 20; width: 240px;
         background: white; border: 1px solid var(--slate-200);
         border-radius: 6px; padding: 8px;
         box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
@@ -78,10 +91,31 @@
         font-size: 11px; cursor: pointer;
     }
     .col-picker-head .reset:hover { color: var(--indigo-500); }
+    .col-picker-hint {
+        font-size: 10px; color: var(--slate-400); padding: 4px 6px 2px;
+    }
+    .col-picker-hint .grip { color: var(--slate-500); }
     .col-picker-menu ul { list-style: none; margin: 4px 0 0; padding: 0; }
-    .col-picker-menu li { margin: 0; }
+    .col-picker-menu li {
+        margin: 0; display: flex; align-items: center; gap: 4px;
+        border-radius: 4px; border: 1px solid transparent;
+        transition: background 80ms ease, border-color 80ms ease;
+    }
+    .col-picker-menu li.drag-over {
+        background: #eef2ff; border-color: #c7d2fe;
+        box-shadow: inset 0 2px 0 #4338ca;
+    }
+    .col-picker-menu li.dragging { opacity: 0.35; }
+    /* Grip is the drag surface — labels shouldn't initiate a drag
+       (interferes with clicking the checkbox). Users can still grab
+       anywhere on the row but the grip is the visible affordance. */
+    .col-picker-menu li .grip {
+        cursor: grab; color: var(--slate-400); font-size: 12px;
+        padding: 0 2px; user-select: none;
+    }
+    .col-picker-menu li:active .grip { cursor: grabbing; }
     .col-picker-menu label {
-        display: flex; align-items: center; gap: 8px;
+        flex: 1; display: flex; align-items: center; gap: 8px;
         padding: 4px 6px; border-radius: 3px;
         font-size: 12px; color: var(--slate-700); cursor: pointer;
     }
@@ -92,11 +126,17 @@
 @code {
     public sealed record ColumnDef(string Id, string Label, bool Required = false);
 
+    // `Columns` is the CURRENT display order — caller re-orders and passes
+    // the new list back on OrderChanged. This keeps the picker stateless
+    // and makes the parent the single source of truth for column order.
     [Parameter, EditorRequired] public IReadOnlyList<ColumnDef> Columns { get; set; } = Array.Empty<ColumnDef>();
     [Parameter, EditorRequired] public Dictionary<string, bool> Visible { get; set; } = new();
     [Parameter] public EventCallback<Dictionary<string, bool>> VisibleChanged { get; set; }
+    [Parameter] public EventCallback<IReadOnlyList<string>> OrderChanged { get; set; }
 
     private bool _open;
+    private int? _draggingIndex;
+    private int? _dragOverIndex;
     private DotNetObjectReference<ColumnPicker>? _selfRef;
 
     protected override void OnInitialized() => _selfRef = DotNetObjectReference.Create(this);
@@ -121,6 +161,71 @@
         var next = new Dictionary<string, bool>();
         foreach (var c in Columns) next[c.Id] = true;
         await VisibleChanged.InvokeAsync(next);
+        // Reset also snaps order back to the caller's declared default —
+        // we signal by emitting an empty list; parent interprets as "clear
+        // saved order, use static default".
+        await OrderChanged.InvokeAsync(Array.Empty<string>());
+    }
+
+    // ---- Drag-and-drop reorder -----------------------------------------
+
+    private void OnDragStart(int index)
+    {
+        _draggingIndex = index;
+        _dragOverIndex = null;
+    }
+
+    // Called on the CURRENT drop target while a drag hovers over it.
+    // preventDefault (via razor directive) is required to signal that
+    // this element accepts drops.
+    private void OnDragOver(Microsoft.AspNetCore.Components.Web.DragEventArgs _, int index)
+    {
+        if (_draggingIndex is null || _draggingIndex == index) return;
+        if (_dragOverIndex != index)
+        {
+            _dragOverIndex = index;
+            StateHasChanged();
+        }
+    }
+
+    private void OnDragLeave(int index)
+    {
+        if (_dragOverIndex == index)
+        {
+            _dragOverIndex = null;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OnDrop(int index)
+    {
+        if (_draggingIndex is not int from || from == index)
+        {
+            _draggingIndex = null;
+            _dragOverIndex = null;
+            return;
+        }
+        // Compute the new order and hand it back to the parent. We don't
+        // mutate `Columns` locally — it's a parameter, and next render will
+        // arrive with the fresh order from the parent.
+        var ids = Columns.Select(c => c.Id).ToList();
+        var moved = ids[from];
+        ids.RemoveAt(from);
+        // If we removed an item before the drop target, the target index
+        // shifts down by one.
+        var insertAt = from < index ? index - 1 : index;
+        ids.Insert(insertAt, moved);
+
+        _draggingIndex = null;
+        _dragOverIndex = null;
+        await OrderChanged.InvokeAsync(ids);
+    }
+
+    private void OnDragEnd()
+    {
+        _draggingIndex = null;
+        _dragOverIndex = null;
+        StateHasChanged();
     }
 
     public void Dispose() => _selfRef?.Dispose();

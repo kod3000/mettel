@@ -67,14 +67,24 @@ else
         color: var(--slate-400); padding: 0 2px;
     }
     .lsn-dismiss:hover { color: var(--slate-700); }
+    /* Matches .dev-launcher (MainLayout.razor) so both bottom-corner
+       pills read as the same class of affordance — indigo filled,
+       uppercase, shadow, lift on hover. */
     .lsn-collapsed {
-        position: fixed; bottom: 8px; right: 8px; z-index: 40;
-        border: 1px solid var(--slate-300); background: rgba(255,255,255,0.9);
-        border-radius: 6px; padding: 4px 8px; font-size: 11px;
-        color: var(--slate-600); cursor: pointer;
-        box-shadow: 0 2px 4px rgb(0 0 0 / 0.1);
+        position: fixed; bottom: 12px; right: 12px; z-index: 40;
+        background: #4338ca; color: white;
+        border: 0; border-radius: 6px;
+        padding: 6px 14px; font-size: 12px; font-weight: 600;
+        letter-spacing: 0.04em; text-transform: uppercase;
+        cursor: pointer; opacity: 1;
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.15), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        transition: transform 120ms ease, box-shadow 120ms ease;
     }
-    .lsn-collapsed:hover { background: white; }
+    .lsn-collapsed:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 12px -2px rgb(0 0 0 / 0.2);
+    }
+    .lsn-collapsed:focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
 </style>
 
 @code {

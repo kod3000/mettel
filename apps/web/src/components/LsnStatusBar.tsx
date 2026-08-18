@@ -58,7 +58,7 @@ export function LsnStatusBar({ apiKey }: Props) {
                 type="button"
                 onClick={() => toggle(true)}
                 title="Show LSN status bar"
-                className="fixed bottom-2 right-2 z-40 rounded-md border border-slate-300 bg-white/90 px-2 py-1 text-[11px] text-slate-600 shadow hover:bg-white"
+                className="fixed bottom-3 right-3 z-40 rounded-md border-0 bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wider text-white shadow-md transition-transform hover:-translate-y-px hover:shadow-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
             >
                 LSN
             </button>

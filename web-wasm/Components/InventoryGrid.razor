@@ -19,7 +19,10 @@
         <CountDisplay Filtered="_filtered" Total="_total" TookMs="_tookMs" />
     </div>
     <LocalReplicaChip Mode="_mode" ModeChanged="OnModeChanged" />
-    <ColumnPicker Columns="PickerColumns" Visible="_visibility" VisibleChanged="OnVisibilityChanged" />
+    <ColumnPicker Columns="OrderedPickerColumns()"
+                  Visible="_visibility"
+                  VisibleChanged="OnVisibilityChanged"
+                  OrderChanged="OnOrderChanged" />
 </div>
 
 <div class="grid-wrap">
@@ -159,10 +162,12 @@
         await ReloadAsync();
     }
 
-    // Column visibility — in-memory. Persisting to localStorage would need
-    // IJSRuntime interop on init; skipped for scope since a demo browser
-    // typically doesn't refresh mid-session. Default = all on.
+    // Column visibility + order — in-memory. Persisting to localStorage
+    // would need IJSRuntime interop on init; skipped for scope since a
+    // demo browser typically doesn't refresh mid-session. Default = all
+    // visible, in the AllColumns declaration order.
     private Dictionary<string, bool> _visibility = new();
+    private List<string>? _columnOrder;
 
     // Column metadata: id, label, min width, css class for the cell body,
     // sort key on the server (null = unsortable). One row per grid column.
@@ -184,8 +189,31 @@
         new("updatedAt",       "Updated",    "minmax(150px, 180px)",           "tabular",       "updatedAt"),
     };
 
-    private static readonly IReadOnlyList<ColumnPicker.ColumnDef> PickerColumns =
+    // Static fallback used when the grid has no user-defined order yet.
+    private static readonly IReadOnlyList<ColumnPicker.ColumnDef> DefaultPickerColumns =
         AllColumns.Select(c => new ColumnPicker.ColumnDef(c.Id, c.Label, c.Required)).ToList();
+
+    // Ordered lookup key for the current column order. Rebuilt lazily via
+    // OrderedColumns() so we only pay when the picker or grid renders.
+    private IEnumerable<Col> OrderedColumns()
+    {
+        if (_columnOrder is null || _columnOrder.Count == 0) return AllColumns;
+        var byId = AllColumns.ToDictionary(c => c.Id, c => c);
+        // 1. Emit known ids in the user's preferred order.
+        // 2. Append any columns the order list forgot (new columns added
+        //    to AllColumns after the user's ordering was captured).
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var list = new List<Col>(AllColumns.Length);
+        foreach (var id in _columnOrder)
+        {
+            if (byId.TryGetValue(id, out var col) && seen.Add(id)) list.Add(col);
+        }
+        foreach (var col in AllColumns) if (seen.Add(col.Id)) list.Add(col);
+        return list;
+    }
+
+    private IReadOnlyList<ColumnPicker.ColumnDef> OrderedPickerColumns() =>
+        OrderedColumns().Select(c => new ColumnPicker.ColumnDef(c.Id, c.Label, c.Required)).ToList();
 
     // Searchable field wires — mirrors Filters.SearchFields. Notes is
     // included even though there's no grid column for it, so notes hits
@@ -196,7 +224,7 @@
     };
 
     private IEnumerable<Col> VisibleColumns() =>
-        AllColumns.Where(c => !_visibility.TryGetValue(c.Id, out var v) || v);
+        OrderedColumns().Where(c => !_visibility.TryGetValue(c.Id, out var v) || v);
 
     private string GridTemplate() =>
         string.Join(' ', VisibleColumns().Select(c => c.Width));
@@ -211,6 +239,15 @@
             total += m.Success ? int.Parse(m.Groups[1].Value) : 180;
         }
         return $"{Math.Max(total + 100, 400)}px";
+    }
+
+    private async Task OnOrderChanged(IReadOnlyList<string> next)
+    {
+        // Empty list = "reset" — clear the override so we fall back to the
+        // static AllColumns order until the operator drags again.
+        _columnOrder = next.Count == 0 ? null : next.ToList();
+        StateHasChanged();
+        if (_virtualize is not null) await _virtualize.RefreshDataAsync();
     }
 
     private async Task OnVisibilityChanged(Dictionary<string, bool> next)

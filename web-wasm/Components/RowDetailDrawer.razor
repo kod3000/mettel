@@ -133,42 +133,50 @@
                     </div>
                 </Field>
 
-                @if (Me.CanWrite)
-                {
-                    <div class="drawer-row-actions">
-                        <button class="btn" @onclick="StartEdit">Edit fields</button>
-                        @if (Me.CanDelete)
-                        {
-                            <button class="btn danger" disabled="@_pending" @onclick="OpenDeleteConfirm">
-                                Delete row
-                            </button>
-                        }
-                    </div>
-                    <div class="drawer-actions">
-                        <div class="eyebrow" style="margin-bottom:8px">Change status</div>
-                        @{
-                            var nexts = NextStatuses(_row.Status);
-                        }
-                        @if (nexts.Length == 0)
-                        {
-                            <div style="font-size:12px;color:var(--slate-500);font-style:italic">
-                                Terminal state — no further transitions allowed.
-                            </div>
-                        }
-                        else
-                        {
-                            <div style="display:flex;flex-wrap:wrap;gap:8px">
-                                @foreach (var s in nexts)
-                                {
-                                    <button
-                                        class="btn @BtnKind(s)"
-                                        disabled="@_pending"
-                                        @onclick="() => PatchStatusAsync(s)">
-                                        @(_pending && _pendingTarget == s ? "Working…" : $"→ {s}")
-                                    </button>
-                                }
-                            </div>
-                        }
+                @* Write actions stay visible for readers but disabled —
+                   reviewer letter: the permission model should teach
+                   itself, not communicate via absence. Tooltip explains
+                   which role a control needs. *@
+                <div class="drawer-row-actions">
+                    <button class="btn"
+                            @onclick="StartEdit"
+                            disabled="@(!Me.CanWrite)"
+                            title="@(Me.CanWrite ? null : "Requires admin or worker role")">
+                        Edit fields
+                    </button>
+                    <button class="btn danger"
+                            disabled="@(!Me.CanDelete || _pending)"
+                            title="@(Me.CanDelete ? null : "Requires admin role")"
+                            @onclick="OpenDeleteConfirm">
+                        Delete row
+                    </button>
+                </div>
+                <div class="drawer-actions">
+                    <div class="eyebrow" style="margin-bottom:8px">Change status</div>
+                    @{
+                        var nexts = NextStatuses(_row.Status);
+                    }
+                    @if (nexts.Length == 0)
+                    {
+                        <div style="font-size:12px;color:var(--slate-500);font-style:italic">
+                            Terminal state — no further transitions allowed.
+                        </div>
+                    }
+                    else
+                    {
+                        <div style="display:flex;flex-wrap:wrap;gap:8px">
+                            @foreach (var s in nexts)
+                            {
+                                <button
+                                    class="btn @BtnKind(s)"
+                                    disabled="@(!Me.CanWrite || _pending)"
+                                    title="@(Me.CanWrite ? null : "Requires admin or worker role")"
+                                    @onclick="() => PatchStatusAsync(s)">
+                                    @(_pending && _pendingTarget == s ? "Working…" : $"→ {s}")
+                                </button>
+                            }
+                        </div>
+                    }
 
                         @if (_terminalErr is not null && _row is not null)
                         {
@@ -181,8 +189,7 @@
                                 }
                             </div>
                         }
-                    </div>
-                }
+                </div>
             }
         </div>
     </aside>

@@ -19,18 +19,17 @@
 <div class="bulk-panel">
     <span style="color:var(--slate-500);font-size:11px">Bulk upload</span>
 
-    @if (Me.CanWrite)
-    {
-        <InputFile OnChange="OnFilePicked" accept=".csv,text/csv" class="bulk-file" />
+    @* File input + Upload button stay visible for readers but are
+       disabled — reviewer letter: "disable controls rather than hide
+       them, so the permission model teaches itself." Tooltip explains why. *@
+    <InputFile OnChange="OnFilePicked" accept=".csv,text/csv" class="bulk-file"
+               disabled="@(!Me.CanWrite)"
+               title="@(Me.CanWrite ? null : "Requires admin or worker role")" />
 
-        <button type="button" class="btn" style="font-size:11px;padding:2px 10px;background:var(--slate-800);color:white;border-color:var(--slate-800)"
-                disabled="@(_file is null || _phase is Phase.Uploading or Phase.Streaming or Phase.Polling)"
-                @onclick="UploadAsync">Upload</button>
-    }
-    else
-    {
-        <span style="color:var(--slate-400);font-size:11px;font-style:italic">read-only role — upload disabled</span>
-    }
+    <button type="button" class="btn" style="font-size:11px;padding:2px 10px;background:var(--slate-800);color:white;border-color:var(--slate-800)"
+            disabled="@(!Me.CanWrite || _file is null || _phase is Phase.Uploading or Phase.Streaming or Phase.Polling)"
+            title="@(Me.CanWrite ? null : "Requires admin or worker role")"
+            @onclick="UploadAsync">Upload</button>
 
     <a href="javascript:void(0)" @onclick="DownloadTemplateAsync" style="color:var(--indigo-600);font-size:11px;text-decoration:underline">CSV template</a>
     <a href="javascript:void(0)" @onclick="DownloadSampleAsync"

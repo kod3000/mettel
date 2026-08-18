@@ -186,16 +186,19 @@ function AppShellInner(props: {
                 >
                     API
                 </button>
-                {canWrite && (
-                    <button
-                        type="button"
-                        onClick={() => setCreateOpen(true)}
-                        data-testid="btn-new"
-                        className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
-                    >
-                        + New
-                    </button>
-                )}
+                {/* + New stays visible for readers but disabled — the
+                    reviewer letter: the permission model should teach
+                    itself, not communicate via absence. */}
+                <button
+                    type="button"
+                    onClick={() => setCreateOpen(true)}
+                    disabled={!canWrite}
+                    data-testid="btn-new"
+                    title={canWrite ? undefined : "Requires admin or worker role"}
+                    className="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-indigo-600"
+                >
+                    + New
+                </button>
             </header>
             <SavedViewsBar params={params} onApply={setParams} canWrite={canWrite} />
             <BulkUploadPanel apiKey={apiKey} canWrite={canWrite} />
@@ -255,7 +258,7 @@ function DevButton({ onOpen }: { onOpen: () => void }) {
             type="button"
             onClick={onOpen}
             title="Open developer smoke checklist"
-            className="fixed bottom-2 left-2 z-40 rounded-md border border-indigo-300 bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-800 shadow hover:bg-indigo-100"
+            className="fixed bottom-3 left-3 z-40 rounded-md border-0 bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wider text-white shadow-md transition-transform hover:-translate-y-px hover:shadow-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
         >
             Dev
         </button>

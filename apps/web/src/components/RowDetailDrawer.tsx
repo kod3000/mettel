@@ -273,30 +273,32 @@ export function RowDetailDrawer({ id, onClose, canWrite, canDelete, adminOnlyFie
                                     </div>
                                 </FieldRow>
 
-                                {canWrite && (
-                                    <div className="mt-2 border-t border-slate-200 pt-3 flex flex-wrap gap-2">
-                                        <button
-                                            type="button"
-                                            data-testid="btn-edit"
-                                            onClick={startEdit}
-                                            className="rounded-md px-3 py-1.5 text-xs font-medium border bg-white border-slate-300 text-slate-700 hover:bg-slate-50"
-                                        >
-                                            Edit fields
-                                        </button>
-                                        {canDelete && (
-                                            <button
-                                                type="button"
-                                                data-testid="btn-delete"
-                                                onClick={() => setConfirmDelete(true)}
-                                                disabled={delMut.isPending}
-                                                className="rounded-md px-3 py-1.5 text-xs font-medium border bg-white border-rose-300 text-rose-700 hover:bg-rose-50 disabled:opacity-50"
-                                            >
-                                                Delete row
-                                            </button>
-                                        )}
-                                    </div>
-                                )}
-                                {canWrite && <ActionPanel row={row} mut={mut} />}
+                                {/* Row actions visible for readers but
+                                    disabled — reviewer letter: teach the
+                                    permission model, don't hide it. */}
+                                <div className="mt-2 border-t border-slate-200 pt-3 flex flex-wrap gap-2">
+                                    <button
+                                        type="button"
+                                        data-testid="btn-edit"
+                                        onClick={startEdit}
+                                        disabled={!canWrite}
+                                        title={canWrite ? undefined : "Requires admin or worker role"}
+                                        className="rounded-md px-3 py-1.5 text-xs font-medium border bg-white border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        Edit fields
+                                    </button>
+                                    <button
+                                        type="button"
+                                        data-testid="btn-delete"
+                                        onClick={() => setConfirmDelete(true)}
+                                        disabled={!canDelete || delMut.isPending}
+                                        title={canDelete ? undefined : "Requires admin role"}
+                                        className="rounded-md px-3 py-1.5 text-xs font-medium border bg-white border-rose-300 text-rose-700 hover:bg-rose-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        Delete row
+                                    </button>
+                                </div>
+                                <ActionPanel row={row} mut={mut} canWrite={canWrite} />
                             </>
                         )
                     ) : null}
@@ -315,10 +317,11 @@ export function RowDetailDrawer({ id, onClose, canWrite, canDelete, adminOnlyFie
 }
 
 function ActionPanel({
-    row, mut,
+    row, mut, canWrite,
 }: {
     row: InventoryRow;
     mut: ReturnType<typeof useMutation<StatusChangeResponse, ApiError, { status: string; rowVersion: number }>>;
+    canWrite: boolean;
 }) {
     const nexts = NEXT_STATUSES[row.status] ?? [];
     const err = mut.error;
@@ -341,9 +344,10 @@ function ActionPanel({
                             key={s}
                             type="button"
                             data-testid={`btn-status-${s}`}
-                            disabled={mut.isPending}
+                            disabled={!canWrite || mut.isPending}
+                            title={canWrite ? undefined : "Requires admin or worker role"}
                             onClick={() => mut.mutate({ status: s, rowVersion: row.rowVersion })}
-                            className={buttonClass(s, mut.isPending)}
+                            className={buttonClass(s, !canWrite || mut.isPending)}
                         >
                             {mut.isPending && mut.variables?.status === s ? "Working…" : `→ ${s}`}
                         </button>

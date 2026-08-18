@@ -65,6 +65,16 @@
 </div>
 
 <style>
+    /* Full-screen dim overlay + centered dialog. Without the fixed
+       positioning the panel drops in-flow at the very end of the app
+       shell and lands below the fold — appearing as if the Dev button
+       did nothing when it actually opened the panel off-screen. */
+    .modal-backdrop {
+        position: fixed; inset: 0; z-index: 60;
+        background: rgba(15, 23, 42, 0.4);
+        display: flex; align-items: center; justify-content: center;
+        padding: 16px;
+    }
     .dev-panel {
         max-height: 85vh; width: 100%; max-width: 720px;
         display: flex; flex-direction: column;
