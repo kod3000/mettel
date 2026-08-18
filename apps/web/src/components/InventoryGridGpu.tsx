@@ -27,11 +27,17 @@ import { Application, Container, Graphics, Text, TextStyle } from "pixi.js";
 import type { InventoryRow, ListParams } from "../api/inventory.js";
 import { useInventoryList } from "../hooks/useInventoryList.js";
 import { CountDisplay } from "./CountDisplay.js";
+import { EmptyState } from "./EmptyState.js";
+import type { Role } from "../tenants.js";
 
 interface Props {
     params: ListParams;
     onParamsChange: (next: ListParams) => void;
     onRowSelect?: (row: InventoryRow) => void;
+    // Role of the current key, from /me. Feeds the empty-state variant.
+    role: Role;
+    // Opens the "+ New" modal from inside the empty state.
+    onCreateNew?: () => void;
 }
 
 // Column layout: [key, header, baseWidth, flexible?]. Mirrors the DOM
@@ -85,7 +91,7 @@ interface RowSlot {
     rowIndex: number; // which logical row this slot currently displays; -1 = unused
 }
 
-export function InventoryGridGpu({ params, onParamsChange, onRowSelect }: Props) {
+export function InventoryGridGpu({ params, onParamsChange, onRowSelect, role, onCreateNew }: Props) {
     const query = useInventoryList(params);
     const rows: InventoryRow[] = useMemo(
         () => query.data?.pages.flatMap((p) => p.rows ?? []) ?? [],
@@ -481,17 +487,23 @@ export function InventoryGridGpu({ params, onParamsChange, onRowSelect }: Props)
                             data-testid="gpu-grid-canvas-host"
                             className="absolute inset-0 cursor-pointer"
                         />
-                        {(query.isPending || query.isError || rows.length === 0) && (
+                        {(query.isPending || query.isError) && (
                             <div
                                 className={`absolute inset-0 flex items-center justify-center px-4 py-6 text-sm z-10 ${
                                     query.isError ? "bg-red-50 text-red-700" : "bg-white/95 text-slate-500"
                                 }`}
                             >
-                                {query.isPending
-                                    ? "Loading…"
-                                    : query.isError
-                                        ? query.error.message
-                                        : "No inventory matches these filters."}
+                                {query.isPending ? "Loading…" : query.error.message}
+                            </div>
+                        )}
+                        {!query.isPending && !query.isError && rows.length === 0 && (
+                            <div className="absolute inset-0 z-10 overflow-y-auto bg-white/95">
+                                <EmptyState
+                                    params={params}
+                                    onParamsChange={onParamsChange}
+                                    role={role}
+                                    onCreateNew={onCreateNew}
+                                />
                             </div>
                         )}
                     </div>

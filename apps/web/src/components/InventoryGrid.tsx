@@ -21,6 +21,8 @@ import type { InventoryRow, ListParams } from "../api/inventory.js";
 import { useInventoryList } from "../hooks/useInventoryList.js";
 import { CountDisplay } from "./CountDisplay.js";
 import { ColumnPicker, loadColumnVisibility, saveColumnVisibility, loadColumnOrder, saveColumnOrder } from "./ColumnPicker.js";
+import { EmptyState } from "./EmptyState.js";
+import type { Role } from "../tenants.js";
 
 interface Props {
     params: ListParams;
@@ -28,6 +30,10 @@ interface Props {
     onRowSelect?: (row: InventoryRow) => void;
     /** When true, rows use GPU-accelerated transform hover (bulge + settle). */
     gpuHover?: boolean;
+    /** Role of the current key from /me. Drives the empty-state variant. */
+    role: Role;
+    /** Called from the empty state's "create your first row" button. */
+    onCreateNew?: () => void;
 }
 
 const columnHelper = createColumnHelper<InventoryRow>();
@@ -90,7 +96,7 @@ const columns = [
 // Only server-sort the five columns the API supports.
 const SORTABLE = new Set(["serviceNumber", "productName", "status", "createdAt", "updatedAt"]);
 
-export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = false }: Props) {
+export function InventoryGrid({ params, onParamsChange, onRowSelect, gpuHover = false, role, onCreateNew }: Props) {
     const query = useInventoryList(params);
     const rows: InventoryRow[] = useMemo(
         () => query.data?.pages.flatMap((p) => p.rows ?? []) ?? [],
