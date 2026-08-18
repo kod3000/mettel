@@ -92,12 +92,21 @@ curl -sS -H "X-Api-Key: pickle-Pepper-PETTER-piPEr-picKEd-PEPPERS_acme" \
 **Regenerate typed client:** `make verify` (rebuilds API, runs tests,
 refreshes `packages/api-types` from the running OpenAPI doc).
 
+**Drive the grid from an MCP agent:** `packages/mcp-server` exposes the
+inventory + bulk-jobs surface as MCP tools. `cd packages/mcp-server && npm
+install && npm run build`, then wire the compiled `dist/server.js` into
+Claude Desktop / Cursor / any MCP client — see the package README for
+config snippets and the recommended agent workflow.
+
 ## Repo layout
 
 ```
 apps/api/           ASP.NET Core 9 minimal API + BulkJobRunner (--worker mode)
 apps/web/           Vite + React 19 + TypeScript grid (TanStack Table/Query/Virtual)
+web-wasm/           Blazor WebAssembly twin at wasm.mettel.exercise.dany.codes
 packages/api-types/ Generated TypeScript types (openapi-typescript)
+packages/mcp-server/ Model Context Protocol server — exposes the API as MCP tools
+                    for Claude Desktop / Cursor / custom agents (stdio transport)
 seed/               Dotnet console app for the 5 M-row generator + sample-upload.csv
 bench/              k6 scenarios + results.md
 ops/                Postgres init + replica bootstrap + nginx conf for the deploy host
